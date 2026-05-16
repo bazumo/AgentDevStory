@@ -12,7 +12,7 @@ const STATE_TO_POSE = {
 
 function characterAssetPath(charIndex, pose, direction) {
   const idx = String(charIndex).padStart(2, '0');
-  return `characters/character-${idx}/${pose}-${direction}.png`;
+  return `assets/characters/character-${idx}/${pose}-${direction}.png`;
 }
 
 function ensureTexture(scene, key, path, cb) {

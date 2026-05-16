@@ -22,13 +22,13 @@ export class AgencyFloorScene extends Phaser.Scene {
 
   preload() {
     for (const key of FURNITURE_KEYS) {
-      this.load.image(key, `web_office/${key}.png`);
+      this.load.image(key, `assets/web_office/${key}.png`);
     }
     for (let i = 1; i <= CHARACTER_COUNT; i++) {
       const idx = String(i).padStart(2, '0');
       this.load.image(
         characterTextureKey(i, 'idle', 'front'),
-        `characters/character-${idx}/idle-front.png`,
+        `assets/characters/character-${idx}/idle-front.png`,
       );
     }
   }
