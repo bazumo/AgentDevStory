@@ -1,6 +1,6 @@
 textures {
-  name: "web_office"
-  texture: "/assets/web_office.atlas"
+  name: "office"
+  texture: "/assets/office.atlas"
 }
 background_color {
   x: 0.09019608
@@ -149,7 +149,7 @@ nodes {
   }
   type: TYPE_BOX
   blend_mode: BLEND_MODE_ALPHA
-  texture: "web_office/desk"
+    texture: "office/desk"
   id: "desk"
   xanchor: XANCHOR_NONE
   yanchor: YANCHOR_NONE
@@ -203,7 +203,7 @@ nodes {
   }
   type: TYPE_BOX
   blend_mode: BLEND_MODE_ALPHA
-  texture: "web_office/chair"
+    texture: "office/chair"
   id: "chair"
   xanchor: XANCHOR_NONE
   yanchor: YANCHOR_NONE
@@ -257,7 +257,7 @@ nodes {
   }
   type: TYPE_BOX
   blend_mode: BLEND_MODE_ALPHA
-  texture: "web_office/laptop"
+    texture: "office/computer"
   id: "laptop"
   xanchor: XANCHOR_NONE
   yanchor: YANCHOR_NONE
@@ -311,7 +311,7 @@ nodes {
   }
   type: TYPE_BOX
   blend_mode: BLEND_MODE_ALPHA
-  texture: "web_office/server_rack"
+    texture: "office/cabinet"
   id: "server"
   xanchor: XANCHOR_NONE
   yanchor: YANCHOR_NONE
@@ -365,7 +365,7 @@ nodes {
   }
   type: TYPE_BOX
   blend_mode: BLEND_MODE_ALPHA
-  texture: "web_office/plant"
+    texture: "office/plant"
   id: "plant"
   xanchor: XANCHOR_NONE
   yanchor: YANCHOR_NONE
@@ -419,7 +419,7 @@ nodes {
   }
   type: TYPE_BOX
   blend_mode: BLEND_MODE_ALPHA
-  texture: "web_office/whiteboard"
+    texture: "office/printer"
   id: "whiteboard"
   xanchor: XANCHOR_NONE
   yanchor: YANCHOR_NONE

@@ -1,0 +1,19 @@
+images {
+  image: "/assets/office/desk.png"
+}
+images {
+  image: "/assets/office/chair.png"
+}
+images {
+  image: "/assets/office/computer.png"
+}
+images {
+  image: "/assets/office/cabinet.png"
+}
+images {
+  image: "/assets/office/plant.png"
+}
+images {
+  image: "/assets/office/printer.png"
+}
+extrude_borders: 2
