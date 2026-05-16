@@ -104,6 +104,7 @@ class TerminalUI {
     this.activeRoom = null;
     this.logsByRoom = new Map();
     this.fsByRoom = new Map();
+    this.seenEventIds = new Set();
 
     this.closeBtn.addEventListener('click', () => this.close());
     this.form.addEventListener('submit', (e) => {
@@ -114,6 +115,7 @@ class TerminalUI {
       this.input.value = '';
     });
     window.addEventListener('agentoffice:room-selected', (e) => this.open(e.detail));
+    window.addEventListener('agentoffice:session-update', (e) => this.onSessionUpdate(e.detail));
   }
 
   open(payload) {
@@ -125,14 +127,88 @@ class TerminalUI {
     if (!this.logsByRoom.has(payload.roomId)) {
       this.logsByRoom.set(payload.roomId, []);
       this.fsByRoom.set(payload.roomId, { ...(MOCK_FILES_BY_TYPE[payload.roomType] ?? {}) });
-      this.appendLine('agent', `[${payload.label}] session attached — ${ROOM_TYPES[payload.roomType]?.ambient ?? ''}`);
-      if (payload.prompt) {
-        this.appendLine('user', payload.prompt);
-        this.streamAgentReply(payload);
-      }
+      this._loadSessionTranscript(payload.roomId);
     }
     this.renderLogs();
     setTimeout(() => this.input.focus(), 50);
+  }
+
+  _loadSessionTranscript(sessionId) {
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(session => {
+        if (!session?.transcript?.length) {
+          this.appendLine('agent', `[session] waiting for events...`);
+          return;
+        }
+        for (const event of session.transcript) {
+          this._renderTranscriptEvent(sessionId, event);
+        }
+        this.renderLogs();
+      })
+      .catch(() => {
+        this.appendLine('agent', `[offline] mock mode`);
+      });
+  }
+
+  _renderTranscriptEvent(sessionId, event) {
+    if (this.seenEventIds.has(event.id)) return;
+    this.seenEventIds.add(event.id);
+
+    const log = this.logsByRoom.get(sessionId);
+    if (!log) return;
+
+    let kind = 'agent';
+    let text = event.message;
+
+    if (event.kind === 'stdout') {
+      try {
+        const parsed = JSON.parse(event.message);
+        if (parsed.type === 'item.completed' && parsed.item?.type === 'agent_message') {
+          text = parsed.item.text;
+          kind = 'agent';
+        } else if (parsed.type === 'item.completed' && parsed.item?.type === 'command_execution') {
+          const cmd = parsed.item.command || '';
+          const output = parsed.item.aggregated_output || '';
+          text = `$ ${cmd.replace(/^\/bin\/bash -lc /, '').replace(/^['"]|['"]$/g, '')}`;
+          kind = 'shell';
+          log.push({ kind, text });
+          if (output.trim()) {
+            log.push({ kind: 'shell', text: output.trim().slice(0, 500) });
+          }
+          return;
+        } else {
+          return;
+        }
+      } catch {
+        kind = 'shell';
+      }
+    } else if (event.kind === 'stderr') {
+      kind = 'error';
+    } else if (event.kind === 'lifecycle') {
+      kind = 'agent';
+      text = `[${event.kind}] ${event.message}`;
+    } else if (event.kind === 'error') {
+      kind = 'error';
+    } else if (event.kind === 'workspace') {
+      kind = 'shell';
+    }
+
+    log.push({ kind, text });
+  }
+
+  onSessionUpdate(session) {
+    if (!session?.id) return;
+    const log = this.logsByRoom.get(session.id);
+    if (!log) return;
+
+    for (const event of session.transcript) {
+      this._renderTranscriptEvent(session.id, event);
+    }
+
+    if (this.activeRoom?.roomId === session.id) {
+      this.renderLogs();
+    }
   }
 
   close() {
