@@ -1,3 +1,9 @@
 .internal/
 build/
 *.dmanifest
+node_modules/
+bun.lockb
+.agentdevstory/
+client/dist/
+server/dist/
+.env

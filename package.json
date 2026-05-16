@@ -1,0 +1,22 @@
+{
+  "name": "agent-dev-story",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --cwd server dev & bun run --cwd client dev",
+    "dev:server": "bun run --cwd server dev",
+    "dev:client": "bun run --cwd client dev",
+    "build": "bun run --cwd client build && bun run --cwd server typecheck",
+    "typecheck": "bun run --cwd server typecheck && bun run --cwd client typecheck",
+    "e2e:live": "bun scripts/live-e2e.ts",
+    "test": "bun test"
+  },
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "devDependencies": {
+    "playwright": "^1.60.0"
+  }
+}
