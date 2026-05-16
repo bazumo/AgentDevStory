@@ -1,0 +1,19 @@
+images {
+  image: "/assets/web_office/desk.png"
+}
+images {
+  image: "/assets/web_office/chair.png"
+}
+images {
+  image: "/assets/web_office/laptop.png"
+}
+images {
+  image: "/assets/web_office/server_rack.png"
+}
+images {
+  image: "/assets/web_office/plant.png"
+}
+images {
+  image: "/assets/web_office/whiteboard.png"
+}
+extrude_borders: 2
