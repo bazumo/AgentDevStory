@@ -1,0 +1,20 @@
+- generic [ref=e2]:
+  - banner:
+    - generic [ref=e5]: AgentOffice
+    - button "+ New Task" [ref=e6] [cursor=pointer]
+  - generic:
+    - generic:
+      - generic: New session prompt
+      - textbox:
+        - /placeholder: e.g. build login form, debug auth bug, write README...
+      - generic:
+        - button: cancel
+        - button: spawn room
+  - complementary:
+    - generic:
+      - generic: —
+      - button: ×
+    - generic:
+      - generic: ">"
+      - textbox:
+        - /placeholder: type a prompt, or ! for shell

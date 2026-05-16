@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AgentOffice</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <div id="phaser-root"></div>
+
+      <header id="topbar">
+        <span class="brand">AgentOffice</span>
+        <button id="new-task-btn" type="button">+ New Task</button>
+      </header>
+
+      <div id="new-task-modal" aria-hidden="true">
+        <form class="new-task-form">
+          <label for="new-task-input">New session prompt</label>
+          <input
+            id="new-task-input"
+            type="text"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="e.g. build login form, debug auth bug, write README..."
+          />
+          <div class="new-task-buttons">
+            <button type="button" id="new-task-cancel">cancel</button>
+            <button type="submit" id="new-task-submit">spawn room</button>
+          </div>
+        </form>
+      </div>
+
+      <aside id="terminal-panel" aria-hidden="true">
+        <header class="terminal-header">
+          <span class="terminal-title" data-bind="roomLabel">—</span>
+          <button id="terminal-close" type="button">×</button>
+        </header>
+        <div class="terminal-log" data-bind="log"></div>
+        <form class="terminal-form">
+          <span class="terminal-prompt">&gt;</span>
+          <input
+            id="terminal-input"
+            type="text"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="type a prompt, or ! for shell"
+          />
+        </form>
+      </aside>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
