@@ -62,8 +62,19 @@ export class AgencyFloorScene extends Phaser.Scene {
       this.spawnRoomFromPrompt(prompt ?? 'untitled task');
     });
 
+    window.addEventListener('agentoffice:world-update', (e) => {
+      this._syncFromBackend(e.detail);
+    });
+
+    window.addEventListener('agentoffice:session-update', (e) => {
+      this._updateSessionState(e.detail);
+    });
+
+    fetch('/api/world').then(r => r.ok ? r.json() : null).then(world => {
+      if (world) this._syncFromBackend(world);
+    }).catch(() => {});
+
     this.setupCameraPan();
-    startMockActivityLoop(this);
 
     const saved = loadState();
     for (const r of saved.rooms) {
@@ -73,6 +84,10 @@ export class AgencyFloorScene extends Phaser.Scene {
         characterIndex: r.characterIndex,
         roomId: r.roomId,
       });
+    }
+
+    if (!window.__agentoffice?.backendConnected) {
+      startMockActivityLoop(this);
     }
   }
 
@@ -171,6 +186,50 @@ export class AgencyFloorScene extends Phaser.Scene {
       characterIndex: r.agent?.characterIndex,
     }));
     saveState({ rooms });
+  }
+
+  _syncFromBackend(world) {
+    if (!world?.sessions) return;
+    for (const session of world.sessions) {
+      const existingRoom = this.rooms.find((r) => r.roomId === session.id);
+      if (existingRoom) {
+        this._applySessionStatus(existingRoom, session);
+        continue;
+      }
+      const roomType = classifyPrompt(session.issueIdentifier + ' ' + (session.latestEvent ?? ''));
+      const charNum = parseInt(session.character?.replace('character-', ''), 10) || undefined;
+      const room = this._spawnRoom({
+        prompt: `${session.issueIdentifier}: ${session.latestEvent ?? 'starting'}`,
+        roomType,
+        characterIndex: charNum,
+        roomId: session.id,
+      });
+      room.sessionId = session.id;
+      this._applySessionStatus(room, session);
+    }
+  }
+
+  _updateSessionState(session) {
+    if (!session) return;
+    const room = this.rooms.find((r) => r.roomId === session.id);
+    if (room) {
+      this._applySessionStatus(room, session);
+    } else {
+      this._syncFromBackend({ sessions: [session] });
+    }
+  }
+
+  _applySessionStatus(room, session) {
+    if (!room.agent) return;
+    const statusToState = {
+      queued: 'idle',
+      running: 'typing',
+      completed: 'success',
+      failed: 'error',
+      stopped: 'dormant',
+    };
+    const state = statusToState[session.status] ?? 'idle';
+    room.agent.setAgentState(state);
   }
 
   update(_time, _delta) {

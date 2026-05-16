@@ -25,17 +25,22 @@ window.__agentoffice = { game, backendConnected: false };
   window.__agentoffice.backendConnected = alive;
 
   if (alive) {
-    const world = await fetchWorld();
-    if (world) {
+    const dispatchWorld = (world) => {
       window.dispatchEvent(new CustomEvent('agentoffice:world-update', { detail: world }));
-    }
+    };
+
     subscribe((event) => {
       if (event.type === 'world') {
-        window.dispatchEvent(new CustomEvent('agentoffice:world-update', { detail: event.world }));
+        dispatchWorld(event.world);
       } else if (event.type === 'session') {
         window.dispatchEvent(new CustomEvent('agentoffice:session-update', { detail: event.session }));
       }
     });
+
+    const world = await fetchWorld();
+    if (world) {
+      setTimeout(() => dispatchWorld(world), 500);
+    }
     console.log('[AgentOffice] Backend connected — live mode');
   } else {
     console.log('[AgentOffice] No backend — running in mock mode');
