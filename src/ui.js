@@ -233,6 +233,152 @@ class TerminalUI {
   }
 }
 
+// Emojis live only as comments in RoomLayouts; map them here so the task list
+// gets visual glyphs without touching world/ or config/ owned by other agents.
+const ROOM_TYPE_EMOJI = {
+  forge:     '🏭',
+  warroom:   '🚨',
+  blueprint: '📐',
+  lounge:    '📚',
+};
+
+const INTEGRATIONS = [
+  { id: 'linear',  name: 'Linear',         color: '#5E6AD2' },
+  { id: 'trello',  name: 'Trello',         color: '#0079BF' },
+  { id: 'jira',    name: 'Jira',           color: '#2684FF' },
+  { id: 'github',  name: 'GitHub Issues',  color: '#c9d1d9' },
+  { id: 'asana',   name: 'Asana',          color: '#F06A6A' },
+  { id: 'notion',  name: 'Notion',         color: '#e6e6e6' },
+];
+
+function emptyStateHTML() {
+  const buttons = INTEGRATIONS.map(svc => `
+      <button class="integration-btn" type="button" data-svc="${svc.id}">
+        <span class="integration-dot" style="--svc:${svc.color}"></span>
+        <span class="integration-name">${svc.name}</span>
+        <span class="integration-arrow">›</span>
+      </button>`).join('');
+  return `
+    <p class="empty-msg">no sessions yet — spawn one with + New Task</p>
+    <div class="empty-divider"><span>or connect</span></div>
+    <div class="integration-list">${buttons}</div>
+  `;
+}
+
+// 0xRRGGBB int -> css hex (RoomTypes.tint is a Phaser-friendly integer)
+function tintToCss(tint) {
+  return '#' + (tint ?? 0xffffff).toString(16).padStart(6, '0');
+}
+
+class TaskListUI {
+  constructor() {
+    this.panel = document.getElementById('task-list-panel');
+    this.itemsEl = this.panel.querySelector('[data-bind="items"]');
+    this.countEl = this.panel.querySelector('[data-bind="count"]');
+    this.toggleBtn = this.panel.querySelector('.task-list-toggle');
+    this.activeRoomId = null;
+    // Track last-rendered signature so we only rebuild the DOM on real changes.
+    this.lastSig = '';
+
+    if (localStorage.getItem('agentoffice:tasks-collapsed') === '1') {
+      this.setCollapsed(true);
+    }
+    this.toggleBtn?.addEventListener('click', () => {
+      this.setCollapsed(!this.panel.classList.contains('collapsed'));
+    });
+
+    window.addEventListener('agentoffice:room-selected', (e) => {
+      this.activeRoomId = e.detail?.roomId ?? null;
+      this.refresh();
+    });
+
+    // Poll the scene — simpler than threading new events through the scene
+    // and cheap enough at 500ms with O(rooms) work.
+    setInterval(() => this.refresh(), 500);
+  }
+
+  setCollapsed(collapsed) {
+    this.panel.classList.toggle('collapsed', collapsed);
+    this.toggleBtn?.setAttribute('aria-expanded', String(!collapsed));
+    localStorage.setItem('agentoffice:tasks-collapsed', collapsed ? '1' : '0');
+  }
+
+  _getRooms() {
+    const scene = window.__agentoffice?.game?.scene?.getScene?.('AgencyFloorScene');
+    return scene?.rooms ?? [];
+  }
+
+  refresh() {
+    const rooms = this._getRooms();
+    // Signature includes anything that affects render: id, prompt, state, active.
+    const sig = rooms
+      .map(r => `${r.roomId}|${r.roomType}|${r.prompt}|${r.agent?.agentState ?? ''}|${r.roomId === this.activeRoomId ? 1 : 0}`)
+      .join('::');
+    if (sig === this.lastSig) return;
+    this.lastSig = sig;
+    this.render(rooms);
+  }
+
+  render(rooms) {
+    this.countEl.textContent = String(rooms.length);
+    if (rooms.length === 0) {
+      this.itemsEl.innerHTML = `<div class="task-list-empty">${emptyStateHTML()}</div>`;
+      return;
+    }
+    this.itemsEl.innerHTML = '';
+    for (const room of rooms) {
+      const meta = ROOM_TYPES[room.roomType] ?? ROOM_TYPES.forge;
+      const tintCss = tintToCss(meta.tint);
+      const state = room.agent?.agentState ?? 'idle';
+
+      const card = document.createElement('div');
+      card.className = 'task-card' + (room.roomId === this.activeRoomId ? ' active' : '');
+      card.dataset.roomId = room.roomId;
+      card.style.borderLeftColor = tintCss;
+
+      const head = document.createElement('div');
+      head.className = 'task-card-head';
+
+      const icon = document.createElement('span');
+      icon.className = 'task-card-icon';
+      icon.textContent = ROOM_TYPE_EMOJI[room.roomType] ?? '•';
+      head.appendChild(icon);
+
+      const label = document.createElement('span');
+      label.className = 'task-card-label';
+      label.style.color = tintCss;
+      label.textContent = meta.label;
+      head.appendChild(label);
+
+      const prompt = document.createElement('div');
+      prompt.className = 'task-card-prompt';
+      prompt.textContent = room.prompt ?? '(no prompt)';
+
+      const stateEl = document.createElement('div');
+      stateEl.className = 'task-card-state';
+      stateEl.dataset.state = state;
+      const dot = document.createElement('span');
+      dot.className = 'task-card-state-dot';
+      stateEl.appendChild(dot);
+      const stateText = document.createElement('span');
+      stateText.textContent = state;
+      stateEl.appendChild(stateText);
+
+      card.appendChild(head);
+      card.appendChild(prompt);
+      card.appendChild(stateEl);
+
+      card.addEventListener('click', () => this._select(room.roomId));
+      this.itemsEl.appendChild(card);
+    }
+  }
+
+  _select(roomId) {
+    const scene = window.__agentoffice?.game?.scene?.getScene?.('AgencyFloorScene');
+    scene?.openTerminalForRoom?.(roomId);
+  }
+}
+
 function gatePhaserKeyboard() {
   const game = window.__agentoffice?.game;
   if (!game?.input?.keyboard) return;
@@ -248,6 +394,7 @@ function gatePhaserKeyboard() {
 export function initUI() {
   new TaskSpawner();
   new TerminalUI();
+  new TaskListUI();
   document.addEventListener('focusin', gatePhaserKeyboard);
   document.addEventListener('focusout', gatePhaserKeyboard);
 }

@@ -5,7 +5,7 @@ import { initUI } from './ui.js';
 const game = new Phaser.Game({
   type: Phaser.AUTO,
   parent: 'phaser-root',
-  backgroundColor: '#1a1d22',
+  transparent: true,
   scale: {
     mode: Phaser.Scale.RESIZE,
     width: '100%',

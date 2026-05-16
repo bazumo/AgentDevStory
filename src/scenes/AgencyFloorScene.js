@@ -10,10 +10,10 @@ import { ROOM_TYPES, classifyPrompt } from '../config/RoomTypes.js';
 import { getSpiralCoordinates } from '../util/spiral.js';
 import { spawnOfficeRoom } from '../world/Room.js';
 import { spawnAgent, startMockActivityLoop } from '../world/Agent.js';
+import { drawAgencyFloor } from '../world/Backdrop.js';
 import { loadState, saveState } from '../util/persistence.js';
 import { chromaKeyAll } from '../util/chromaKey.js';
-
-const FURNITURE_KEYS = ['desk', 'chair', 'laptop', 'server_rack', 'plant', 'whiteboard'];
+import { ASSETS, ASSET_ROLES } from '../config/Assets.js';
 
 export class AgencyFloorScene extends Phaser.Scene {
   constructor() {
@@ -21,8 +21,9 @@ export class AgencyFloorScene extends Phaser.Scene {
   }
 
   preload() {
-    for (const key of FURNITURE_KEYS) {
-      this.load.image(key, `web_office/${key}.png`);
+    for (const role of ASSET_ROLES) {
+      const a = ASSETS[role];
+      this.load.image(a.key, a.path);
     }
     for (let i = 1; i <= CHARACTER_COUNT; i++) {
       const idx = String(i).padStart(2, '0');
@@ -34,11 +35,14 @@ export class AgencyFloorScene extends Phaser.Scene {
   }
 
   create() {
-    const preloadedKeys = [...FURNITURE_KEYS];
-    for (let i = 1; i <= CHARACTER_COUNT; i++) {
-      preloadedKeys.push(characterTextureKey(i, 'idle', 'front'));
+    // All current assets ship with transparent backgrounds — no chroma-key.
+    // (Older opaque-bg assets that need keying should set chromaKey: true in
+    // Assets.js; the loop honors that flag.)
+    const keysNeedingChromaKey = [];
+    for (const role of ASSET_ROLES) {
+      if (ASSETS[role].chromaKey === true) keysNeedingChromaKey.push(ASSETS[role].key);
     }
-    chromaKeyAll(this, preloadedKeys);
+    if (keysNeedingChromaKey.length) chromaKeyAll(this, keysNeedingChromaKey);
 
     this.renderableList = [];
     this.rooms = [];
@@ -51,7 +55,11 @@ export class AgencyFloorScene extends Phaser.Scene {
     this.worldContainer.__panX = 0;
     this.worldContainer.__panY = 0;
 
-    this.drawDebugAnchor();
+    const backdrop = drawAgencyFloor(this);
+    // Trees and lamps need per-frame depth sort so they layer with rooms.
+    for (const obj of backdrop) {
+      if (obj.kind === 'scenery') this.renderableList.push(obj);
+    }
 
     this.scale.on('resize', (gameSize) => {
       this.worldContainer.x = gameSize.width / 2 + this.worldContainer.__panX;
@@ -81,7 +89,11 @@ export class AgencyFloorScene extends Phaser.Scene {
     this.dragState = null;
 
     this.input.on('pointerdown', (pointer, currentlyOver) => {
-      if (currentlyOver.length > 0) return;
+      // Only block drag-pan when a non-floor interactive (e.g. future click
+      // targets like a building entry button) was hit. Floor tiles are always
+      // interactive but should still allow drag-pan to start.
+      const blocksDrag = currentlyOver.some(o => o.kind && o.kind !== 'floor');
+      if (blocksDrag) return;
       this.tweens.killTweensOf(this.worldContainer);
       this.dragState = {
         startPointer: { x: pointer.x, y: pointer.y },
@@ -102,6 +114,12 @@ export class AgencyFloorScene extends Phaser.Scene {
     const endDrag = () => { this.dragState = null; };
     this.input.on('pointerup', endDrag);
     this.input.on('pointerupoutside', endDrag);
+  }
+
+  openTerminalForRoom(roomId) {
+    const room = this.rooms.find(r => r.roomId === roomId);
+    if (!room?.desk) return;
+    this.selectDesk(room.desk);
   }
 
   selectDesk(desk) {
@@ -191,19 +209,33 @@ export class AgencyFloorScene extends Phaser.Scene {
       }
     }
 
+    // Strict layer rendering: every floor draws before any wall, every wall
+    // before any furniture, every furniture before any sprite. Each layer
+    // has a 1000-unit band; within a band, sortY orders adjacent items.
+    //
+    //   backdrop  : -10000       (the agency mega-floor, always behind)
+    //   scenery   : -9000..-9200 (trees, lamp posts — sit between backdrop
+    //                             and rooms so rooms stay on top)
+    //   floor     :     0..  200
+    //   accent    :   100..  300 (tinted overlay on floor tiles)
+    //   wall      :  1000.. 1200
+    //   furniture :  2000.. 2200
+    //   desk      :  2100.. 2300 (slightly above generic furniture)
+    //   agent     :  3000.. 3200
+    //   fx        : 10000+       (halo flashes, always foreground)
     for (const obj of this.renderableList) {
-      let bias = 0;
       switch (obj.kind) {
-        case 'wall':         bias = -6; break;
-        case 'floor':        bias =  0; break;
-        case 'floor-accent': bias =  1; break;
-        case 'furniture':    bias =  2; break;
-        case 'desk':         bias =  3; break;
-        case 'agent':        bias =  5; break;
-        case 'fx':           bias = 1000; break;
-        default:             bias = 0;
+        case 'backdrop':     obj.depth = -10000; continue;
+        case 'scenery':      obj.depth = -9000 + (obj.__sceneryY ?? obj.y); continue;
+        case 'floor':        obj.depth =     0 + (obj.__sortY ?? obj.y); break;
+        case 'floor-accent': obj.depth =   100 + (obj.__sortY ?? obj.y); break;
+        case 'wall':         obj.depth =  1000 + (obj.__sortY ?? obj.y); break;
+        case 'furniture':    obj.depth =  2000 + (obj.__sortY ?? obj.y); break;
+        case 'desk':         obj.depth =  2100 + (obj.__sortY ?? obj.y); break;
+        case 'agent':        obj.depth =  3000 + (obj.__sortY ?? obj.y); break;
+        case 'fx':           obj.depth = 10000 + obj.y; break;
+        default:             obj.depth =       (obj.__sortY ?? obj.y);
       }
-      obj.depth = obj.y + bias;
     }
     this.worldContainer.sort('depth');
   }
@@ -213,11 +245,6 @@ export class AgencyFloorScene extends Phaser.Scene {
       x: (col - row) * (ISO.TILE_WIDTH / 2),
       y: (col + row) * (ISO.TILE_HEIGHT / 2),
     };
-  }
-
-  drawDebugAnchor() {
-    const dot = this.add.circle(0, 0, 4, 0xff0044);
-    this.worldContainer.add(dot);
   }
 
   roomTypeMeta(type) {

@@ -10,6 +10,57 @@
     <div id="app">
       <div id="phaser-root"></div>
 
+      <aside id="task-list-panel">
+        <header class="task-list-header">
+          <button
+            class="task-list-toggle"
+            type="button"
+            aria-label="Toggle sessions panel"
+            aria-expanded="true"
+          >«</button>
+          <span class="task-list-title">Sessions</span>
+          <span class="task-list-count" data-bind="count">0</span>
+        </header>
+        <div class="task-list-items" data-bind="items">
+          <div class="task-list-empty">
+            <p class="empty-msg">no sessions yet — spawn one with + New Task</p>
+            <div class="empty-divider"><span>or connect</span></div>
+            <div class="integration-list">
+              <button class="integration-btn" type="button" data-svc="linear">
+                <span class="integration-dot" style="--svc:#5E6AD2"></span>
+                <span class="integration-name">Linear</span>
+                <span class="integration-arrow">›</span>
+              </button>
+              <button class="integration-btn" type="button" data-svc="trello">
+                <span class="integration-dot" style="--svc:#0079BF"></span>
+                <span class="integration-name">Trello</span>
+                <span class="integration-arrow">›</span>
+              </button>
+              <button class="integration-btn" type="button" data-svc="jira">
+                <span class="integration-dot" style="--svc:#2684FF"></span>
+                <span class="integration-name">Jira</span>
+                <span class="integration-arrow">›</span>
+              </button>
+              <button class="integration-btn" type="button" data-svc="github">
+                <span class="integration-dot" style="--svc:#c9d1d9"></span>
+                <span class="integration-name">GitHub Issues</span>
+                <span class="integration-arrow">›</span>
+              </button>
+              <button class="integration-btn" type="button" data-svc="asana">
+                <span class="integration-dot" style="--svc:#F06A6A"></span>
+                <span class="integration-name">Asana</span>
+                <span class="integration-arrow">›</span>
+              </button>
+              <button class="integration-btn" type="button" data-svc="notion">
+                <span class="integration-dot" style="--svc:#e6e6e6"></span>
+                <span class="integration-name">Notion</span>
+                <span class="integration-arrow">›</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </aside>
+
       <header id="topbar">
         <span class="brand">AgentOffice</span>
         <button id="new-task-btn" type="button">+ New Task</button>
