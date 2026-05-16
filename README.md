@@ -5,6 +5,7 @@ Isometric visual canvas for monitoring multiple long-running AI coding sessions 
 This iteration is the **visual canvas + UI shell** only. Real WebSocket backend, `./workspace/` directory creation, `chokidar` watcher, and `gbrain` graph sync are the next phase (see "Roadmap" below). For now, the classifier, agent activity, and shell are mocked client-side.
 
 ## Stack
+
 - Phaser 3 (canvas / iso rendering)
 - Vite (dev + build)
 - Vanilla JS / CSS for the DOM overlay (top bar, new-task modal, slide-over terminal)
@@ -20,6 +21,7 @@ npm run dev
 Open http://127.0.0.1:5173.
 
 ## What works
+
 - **+ New Task** button → opens a prompt modal. Heuristic keyword classifier picks one of four room types:
   - 🏭 The Forge — feature building (`build`, `feature`, `implement`, `add`, ...)
   - 🚨 The War Room — debugging (`bug`, `fix`, `error`, `stack trace`, ...)
@@ -37,6 +39,7 @@ Open http://127.0.0.1:5173.
 - **Mock activity loop**: every ~1.8s each agent flips to a random state (idle / thinking / typing / cheer / surprised / sleep) so the sprites visibly cycle.
 
 ## Source layout
+
 ```
 src/
   main.js                  Phaser bootstrap + UI init
@@ -59,6 +62,7 @@ assets/
 ```
 
 ## Roadmap (next phases — out of scope for this iteration)
+
 - **Real backend.** Node WebSocket server. `ROOM_SPAWN` / `AGENT_MOVE` / `AGENT_STATE` / `TERMINAL_STREAM` / `TERMINAL_INPUT` events per spec. Replace mock activity loop.
 - **Real workspace dirs.** Per-task `./workspace/<task>/` creation; `state.json` instead of `localStorage`.
 - **Live agent threads.** Wire each room to an actual Claude / Codex session with filesystem MCP scoped to its workspace.
