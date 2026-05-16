@@ -1,6 +1,6 @@
 textures {
-  name: "office"
-  texture: "/assets/office.atlas"
+  name: "office_items"
+  texture: "/assets/office-items.atlas"
 }
 background_color {
   x: 0.09019608
@@ -149,7 +149,7 @@ nodes {
   }
   type: TYPE_BOX
   blend_mode: BLEND_MODE_ALPHA
-    texture: "office/desk"
+    texture: "office_items/desk"
   id: "desk"
   xanchor: XANCHOR_NONE
   yanchor: YANCHOR_NONE
@@ -203,7 +203,7 @@ nodes {
   }
   type: TYPE_BOX
   blend_mode: BLEND_MODE_ALPHA
-    texture: "office/chair"
+    texture: "office_items/chair"
   id: "chair"
   xanchor: XANCHOR_NONE
   yanchor: YANCHOR_NONE
@@ -257,7 +257,7 @@ nodes {
   }
   type: TYPE_BOX
   blend_mode: BLEND_MODE_ALPHA
-    texture: "office/computer"
+    texture: "office_items/bookshelf"
   id: "laptop"
   xanchor: XANCHOR_NONE
   yanchor: YANCHOR_NONE
@@ -311,7 +311,7 @@ nodes {
   }
   type: TYPE_BOX
   blend_mode: BLEND_MODE_ALPHA
-    texture: "office/cabinet"
+    texture: "office_items/file-cabinet"
   id: "server"
   xanchor: XANCHOR_NONE
   yanchor: YANCHOR_NONE
@@ -365,7 +365,7 @@ nodes {
   }
   type: TYPE_BOX
   blend_mode: BLEND_MODE_ALPHA
-    texture: "office/plant"
+    texture: "office_items/printer"
   id: "plant"
   xanchor: XANCHOR_NONE
   yanchor: YANCHOR_NONE
@@ -419,7 +419,7 @@ nodes {
   }
   type: TYPE_BOX
   blend_mode: BLEND_MODE_ALPHA
-    texture: "office/printer"
+    texture: "office_items/whiteboard"
   id: "whiteboard"
   xanchor: XANCHOR_NONE
   yanchor: YANCHOR_NONE

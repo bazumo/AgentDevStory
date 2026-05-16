@@ -1,0 +1,49 @@
+images {
+  image: "/assets/office-items/desk/desk.png"
+}
+images {
+  image: "/assets/office-items/chair/chair.png"
+}
+images {
+  image: "/assets/office-items/bookshelf/bookshelf.png"
+}
+images {
+  image: "/assets/office-items/file-cabinet/file-cabinet.png"
+}
+images {
+  image: "/assets/office-items/printer/printer.png"
+}
+images {
+  image: "/assets/office-items/whiteboard/whiteboard.png"
+}
+images {
+  image: "/assets/office-items/couch/couch.png"
+}
+images {
+  image: "/assets/office-items/meeting-table/meeting-table.png"
+}
+images {
+  image: "/assets/office-items/cubicle/cubicle.png"
+}
+images {
+  image: "/assets/office-items/water-cooler/water-cooler.png"
+}
+images {
+  image: "/assets/office-items/plant/plant.png"
+}
+images {
+  image: "/assets/office-items/lamp/lamp.png"
+}
+images {
+  image: "/assets/office-items/trash-can/trash-can.png"
+}
+images {
+  image: "/assets/office-items/server-rack/server-rack.png"
+}
+images {
+  image: "/assets/office-items/reception-desk/reception-desk.png"
+}
+images {
+  image: "/assets/office-items/storage-rack/storage-rack.png"
+}
+extrude_borders: 2
