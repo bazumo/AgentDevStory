@@ -37,7 +37,7 @@ export const ROOM_LAYOUTS = {
     grid: [
       ['serverRack', 'serverRack',  'serverRack', 'serverRack', 'serverRack'],
       ['serverRack',  null,          null,         null,         null       ],
-      [null,          null,         'meetingTable', null,        null       ],
+      [null,          null,         'desk',         null,        null       ],
       ['serverRack',  null,          null,         null,         null       ],
       ['whiteboard',  null,          null,         null,        'lamp'      ],
     ],
@@ -57,7 +57,7 @@ export const ROOM_LAYOUTS = {
     grid: [
       ['whiteboard', 'whiteboard', null,          'whiteboard', 'bookshelf'],
       ['whiteboard',  null,         null,          null,         null      ],
-      [null,          null,        'meetingTable', null,         null      ],
+      [null,          null,        'desk',         null,         null      ],
       ['whiteboard',  null,         null,          null,         null      ],
       ['bookshelf',   null,        'plant',        null,        'lamp'     ],
     ],
@@ -78,7 +78,7 @@ export const ROOM_LAYOUTS = {
       ['bookshelf',  null,        null,        null,        null      ],
       [null,        'chair',     'desk',       null,        null      ],
       ['bookshelf',  null,        null,        null,       'lamp'     ],
-      ['waterCooler', null,     'couch',       null,       'plant'    ],
+      ['waterCooler', null,     'bookshelf',   null,       'plant'    ],
     ],
     primary: [2, 2],
     accents: [

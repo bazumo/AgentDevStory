@@ -157,7 +157,8 @@ export function spawnOfficeRoom(scene, { roomId, macroCoords, roomType }) {
       // terminal. pointerup only fires when the pointer is released over the
       // same tile (minimal drag), so big drags become camera pans instead.
       floor.setInteractive({ useHandCursor: true, hitArea: makeDiamondHitArea(), hitAreaCallback: diamondHitTest });
-      floor.on('pointerup', () => scene.openTerminalForRoom(roomId));
+      // Suppress the click if the press turned into a drag.
+      floor.on('pointerup', () => scene.handleRoomFloorClick(roomId));
       scene.worldContainer.add(floor);
       created.push(floor);
     }
@@ -216,6 +217,8 @@ export function spawnOfficeRoom(scene, { roomId, macroCoords, roomType }) {
         role,
         tile: [r, c],
         scale: props.scale,
+        offsetX: props.offsetX ?? 0,
+        offsetY: props.offsetY ?? 0,
         primaryDesk: isPrimary,
       });
       if (!sprite) continue;
@@ -235,10 +238,20 @@ export function spawnOfficeRoom(scene, { roomId, macroCoords, roomType }) {
     // a click target, so we no longer need a special desk handler.
   }
 
+  // Per-room back-to-front sort key: the front-most tile's screen y.
+  // Every object created here is tagged with this so depth sort can place
+  // entire rooms in iso order regardless of layer bands.
+  const frontCorner = scene.gridToScreen(
+    base.macroRow + ISO.ROOM_SIZE - 1,
+    base.macroCol + ISO.ROOM_SIZE - 1,
+  );
+  const roomY = frontCorner.y;
+  for (const obj of created) obj.__roomY = roomY;
+
   scene.renderableList.push(...created);
   flashRoomSpawn(scene, created, meta);
 
-  return { roomId, roomType, macroCoords, desk: primaryDesk, members: created, tiles, base };
+  return { roomId, roomType, macroCoords, desk: primaryDesk, members: created, tiles, base, roomY };
 }
 
 function addWallTriplet(scene, created, sx, sy, outerPts, capPts, bandPts, bodyColor, accentColor) {
@@ -277,8 +290,8 @@ function placeItem(scene, base, item) {
   }
   const { x: sx, y: sy } = scene.gridToScreen(base.macroRow + r, base.macroCol + c);
   // Asset offset (independent of walls). __sortY stays pinned to tile-center sy.
-  const wx = sx - (ISO.TILE_WIDTH * 7) / 16;  // -28px left
-  const wy = sy;                              //   0px (back to tile center)
+  const wx = sx - (ISO.TILE_WIDTH * 8) / 16 + (item.offsetX ?? 0);  // -32px left + per-asset offset
+  const wy = sy - (ISO.TILE_HEIGHT * 1) / 8 + (item.offsetY ?? 0);  // -4px up + per-asset offset
   const sprite = scene.add.image(wx, wy, key);
   sprite.setOrigin(0.5, 1);
   sprite.setScale(item.scale ?? 0.7);

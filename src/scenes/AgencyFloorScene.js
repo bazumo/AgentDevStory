@@ -87,17 +87,20 @@ export class AgencyFloorScene extends Phaser.Scene {
   setupCameraPan() {
     this.panKeys = this.input.keyboard.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT');
     this.dragState = null;
+    // Movement threshold to count as a drag (squared, in CSS px). A press
+    // that moves less than ~5px is treated as a click; more than that
+    // suppresses the floor-tile pointerup → terminal open.
+    const DRAG_THRESHOLD_SQ = 25;
 
     this.input.on('pointerdown', (pointer, currentlyOver) => {
-      // Only block drag-pan when a non-floor interactive (e.g. future click
-      // targets like a building entry button) was hit. Floor tiles are always
-      // interactive but should still allow drag-pan to start.
+      // Block drag-pan only when a non-floor interactive was hit.
       const blocksDrag = currentlyOver.some(o => o.kind && o.kind !== 'floor');
       if (blocksDrag) return;
       this.tweens.killTweensOf(this.worldContainer);
       this.dragState = {
         startPointer: { x: pointer.x, y: pointer.y },
         startContainer: { x: this.worldContainer.x, y: this.worldContainer.y },
+        dragged: false,
       };
     });
 
@@ -105,15 +108,38 @@ export class AgencyFloorScene extends Phaser.Scene {
       if (!this.dragState) return;
       const dx = pointer.x - this.dragState.startPointer.x;
       const dy = pointer.y - this.dragState.startPointer.y;
+      if (!this.dragState.dragged && (dx * dx + dy * dy) > DRAG_THRESHOLD_SQ) {
+        this.dragState.dragged = true;
+      }
       this.worldContainer.x = this.dragState.startContainer.x + dx;
       this.worldContainer.y = this.dragState.startContainer.y + dy;
       this.worldContainer.__panX = this.worldContainer.x - this.cameras.main.centerX;
       this.worldContainer.__panY = this.worldContainer.y - ISO.WORLD_ORIGIN_Y;
     });
 
-    const endDrag = () => { this.dragState = null; };
+    // Clear dragState AFTER GameObject pointerup handlers fire so they can
+    // inspect this.dragState?.dragged to distinguish click vs drag. We
+    // schedule the clear via setTimeout 0 so it runs in the next microtask.
+    const endDrag = () => {
+      const finished = this.dragState;
+      // Keep a brief reference on the scene so floor pointerup (which runs
+      // synchronously BEFORE this scene-level handler? actually order varies)
+      // can still see it. Phaser fires GameObject events first, then the
+      // input-plugin scene event — so by the time endDrag runs, the floor's
+      // pointerup has already inspected dragState.
+      this.dragState = null;
+      // Stash for any post-frame consumer (debug).
+      this.lastDrag = finished;
+    };
     this.input.on('pointerup', endDrag);
     this.input.on('pointerupoutside', endDrag);
+  }
+
+  // Floor tiles call this on pointerup. Suppress the click if the press
+  // turned into a drag (dragState.dragged was set during pointermove).
+  handleRoomFloorClick(roomId) {
+    if (this.dragState?.dragged) return;
+    this.openTerminalForRoom(roomId);
   }
 
   openTerminalForRoom(roomId) {
@@ -209,33 +235,38 @@ export class AgencyFloorScene extends Phaser.Scene {
       }
     }
 
-    // Strict layer rendering: every floor draws before any wall, every wall
-    // before any furniture, every furniture before any sprite. Each layer
-    // has a 1000-unit band; within a band, sortY orders adjacent items.
+    // Two-level depth sort:
+    //   1) BETWEEN rooms — each room gets a base = roomY * ROOM_STRIDE so a
+    //      visually-closer room (higher front-tile y) draws ENTIRELY on top
+    //      of any further-back room. Without this, a back room's furniture
+    //      (band 2000+) would draw over a front room's walls (band 1000+).
+    //   2) WITHIN a room — layer bands (floor → wall → furniture → agent),
+    //      with sortY breaking ties inside each band.
     //
-    //   backdrop  : -10000       (the agency mega-floor, always behind)
-    //   scenery   : -9000..-9200 (trees, lamp posts — sit between backdrop
-    //                             and rooms so rooms stay on top)
-    //   floor     :     0..  200
-    //   accent    :   100..  300 (tinted overlay on floor tiles)
-    //   wall      :  1000.. 1200
-    //   furniture :  2000.. 2200
-    //   desk      :  2100.. 2300 (slightly above generic furniture)
-    //   agent     :  3000.. 3200
-    //   fx        : 10000+       (halo flashes, always foreground)
+    // Non-room renderables (backdrop / scenery / fx) use their own depths
+    // outside the room band range.
+    const ROOM_STRIDE = 100;
     for (const obj of this.renderableList) {
       switch (obj.kind) {
-        case 'backdrop':     obj.depth = -10000; continue;
-        case 'scenery':      obj.depth = -9000 + (obj.__sceneryY ?? obj.y); continue;
-        case 'floor':        obj.depth =     0 + (obj.__sortY ?? obj.y); break;
-        case 'floor-accent': obj.depth =   100 + (obj.__sortY ?? obj.y); break;
-        case 'wall':         obj.depth =  1000 + (obj.__sortY ?? obj.y); break;
-        case 'furniture':    obj.depth =  2000 + (obj.__sortY ?? obj.y); break;
-        case 'desk':         obj.depth =  2100 + (obj.__sortY ?? obj.y); break;
-        case 'agent':        obj.depth =  3000 + (obj.__sortY ?? obj.y); break;
-        case 'fx':           obj.depth = 10000 + obj.y; break;
-        default:             obj.depth =       (obj.__sortY ?? obj.y);
+        case 'backdrop':     obj.depth = -1e6; continue;
+        case 'scenery':      obj.depth = -5e5 + (obj.__sceneryY ?? obj.y); continue;
+        case 'fx':           obj.depth =  1e7 + obj.y; continue;
       }
+      // Room layer bias (relative to that room's band).
+      let bias = 0;
+      switch (obj.kind) {
+        case 'floor':        bias =    0; break;
+        case 'floor-accent': bias =  100; break;
+        case 'wall':         bias = 1000; break;
+        case 'furniture':    bias = 2000; break;
+        case 'desk':         bias = 2100; break;
+        case 'agent':        bias = 3000; break;
+      }
+      const roomY  = obj.__roomY ?? 0;
+      const sortY  = obj.__sortY ?? obj.y;
+      // Within-room relative y for fine ordering (small range, ~ -100..+100).
+      const localY = sortY - roomY;
+      obj.depth = roomY * ROOM_STRIDE + bias + localY;
     }
     this.worldContainer.sort('depth');
   }

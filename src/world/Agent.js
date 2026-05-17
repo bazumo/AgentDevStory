@@ -29,18 +29,15 @@ const SM_TO_POSE = {
   SLEEPING:           'sleep',
 };
 
-// Quarter-tile shift applied to furniture in Room.js. The chair tile's
-// furniture is shifted (-TILE_WIDTH/4, +TILE_HEIGHT/4), so the agent must
-// match to stay visually seated.
-const FURNITURE_SHIFT_X = -ISO.TILE_WIDTH / 4;
-const FURNITURE_SHIFT_Y =  ISO.TILE_HEIGHT / 4;
-
 // Walk tuning.
-const WALK_FRAME_MS         = 200;   // walk-1 / walk-2 cycle interval
-const WALK_TILE_DURATION_MS = 1200;  // time to traverse one tile
-const WALK_HOPS_MIN         = 1;     // hops per excursion (tiles to wander)
-const WALK_HOPS_MAX         = 3;
+const WALK_FRAME_MS         = 220;   // walk-1 / walk-2 cycle interval
+const WALK_TILE_DURATION_MS = 520;   // time to traverse one tile (adjacent step)
 const REACT_DURATION_MS     = 1500;
+
+// gridToScreen(r, c) returns the tile's TOP CORNER (the vertex where four
+// tiles meet), not the tile center. Shift down by half a tile-height to
+// land in the actual tile center, where the agent's feet should plant.
+const AGENT_FOOT_OFFSET_Y   = ISO.TILE_HEIGHT / 2;
 
 function characterAssetPath(charIndex, pose, direction) {
   const idx = String(charIndex).padStart(2, '0');
@@ -66,19 +63,85 @@ function setPose(scene, agent, pose, direction) {
 function pickRandomInRoomTile(agent) {
   // Returns a {r, c} in room-local coords [0..ROOM_SIZE-1] that is walkable
   // per room.tiles[][]. Walls (r=0 / c=0) and non-walkable assets (desks,
-  // bookshelves, whiteboards, etc.) are filtered out automatically.
+  // bookshelves, whiteboards, etc.) are filtered out automatically. Excludes
+  // the agent's home tile so wandering always goes somewhere new.
   const room = agent.__room;
   if (!room?.tiles) return null;
+  const home = agent.__homeRC ?? { r: 2, c: 1 };
   const candidates = [];
   for (let r = 1; r < ISO.ROOM_SIZE; r++) {
     for (let c = 1; c < ISO.ROOM_SIZE; c++) {
       if (!room.tiles[r][c].walkable) continue;
-      if (r === 1 && c === 2) continue; // skip own chair (rest position)
+      if (r === home.r && c === home.c) continue;
       candidates.push({ r, c });
     }
   }
   if (!candidates.length) return null;
   return candidates[Math.floor(Math.random() * candidates.length)];
+}
+
+// Pick the agent's spawn / rest tile. Prefer a chair if the layout has one
+// (chairs are walkable and visually simulate "sitting at the desk"). Fall
+// back to an empty walkable tile near the primary desk so the agent never
+// spawns inside a bookshelf, cubicle, or whiteboard.
+function pickHomeTile(room) {
+  if (!room?.tiles) return { r: 2, c: 1 };
+  for (let r = 1; r < ISO.ROOM_SIZE; r++) {
+    for (let c = 1; c < ISO.ROOM_SIZE; c++) {
+      if (room.tiles[r][c].asset === 'chair') return { r, c };
+    }
+  }
+  const prefs = [[2,1], [3,2], [2,3], [3,3], [1,2], [1,1]];
+  for (const [r, c] of prefs) {
+    const t = room.tiles[r]?.[c];
+    if (t && t.walkable && t.asset == null) return { r, c };
+  }
+  for (let r = 1; r < ISO.ROOM_SIZE; r++) {
+    for (let c = 1; c < ISO.ROOM_SIZE; c++) {
+      const t = room.tiles[r][c];
+      if (t.walkable && t.asset == null) return { r, c };
+    }
+  }
+  return { r: 2, c: 2 };
+}
+
+// BFS shortest path on the room tile grid. Each step is to a 4-connected
+// neighbor (row±1 or col±1), so when projected to screen the agent always
+// glides along one of the four iso diagonals — never cuts across tile
+// corners. `start` and `goal` are always treated as passable (the chair tile
+// is the agent's home and may be flagged non-walkable for the wander picker).
+function findTilePath(room, start, goal) {
+  const passable = (r, c) => {
+    if (r < 0 || c < 0 || r >= ISO.ROOM_SIZE || c >= ISO.ROOM_SIZE) return false;
+    if (r === start.r && c === start.c) return true;
+    if (r === goal.r && c === goal.c) return true;
+    return !!room.tiles[r]?.[c]?.walkable;
+  };
+  const key = (r, c) => r * 100 + c;
+  const parent = new Map();
+  parent.set(key(start.r, start.c), null);
+  const queue = [start];
+  while (queue.length) {
+    const cur = queue.shift();
+    if (cur.r === goal.r && cur.c === goal.c) {
+      const path = [];
+      let n = cur;
+      while (n && !(n.r === start.r && n.c === start.c)) {
+        path.unshift(n);
+        n = parent.get(key(n.r, n.c));
+      }
+      return path;
+    }
+    for (const [dr, dc] of [[-1,0],[1,0],[0,-1],[0,1]]) {
+      const nr = cur.r + dr, nc = cur.c + dc;
+      if (!passable(nr, nc)) continue;
+      const k = key(nr, nc);
+      if (parent.has(k)) continue;
+      parent.set(k, cur);
+      queue.push({ r: nr, c: nc });
+    }
+  }
+  return null;
 }
 
 function dirForStep(dr, dc) {
@@ -93,18 +156,15 @@ function dirForStep(dr, dc) {
   return dr >= 0 ? 'front' : 'back';
 }
 
-function chairScreenPos(scene, room) {
-  const macro = room.macroCoords;
-  const p = scene.gridToScreen(macro.macroRow + 1, macro.macroCol + 2);
-  return { x: p.x + FURNITURE_SHIFT_X, y: p.y + FURNITURE_SHIFT_Y };
-}
-
+// Tile (r, c) in room-local coords → screen-space position where the agent's
+// feet should plant. gridToScreen returns the tile's TOP corner (four-tile
+// meeting vertex), so we offset by AGENT_FOOT_OFFSET_Y to reach the tile
+// center. Used identically for spawn position and walk-step targets so the
+// agent moves through tile centers, never through corner vertices.
 function roomTileScreenPos(scene, room, localR, localC) {
-  // Walking targets occupy whole tiles. We DON'T apply the furniture quarter-
-  // tile shift while walking on the floor — the agent walks tile-to-tile in
-  // the actual tile centers, then returns to the chair (which is shifted).
   const macro = room.macroCoords;
-  return scene.gridToScreen(macro.macroRow + localR, macro.macroCol + localC);
+  const p = scene.gridToScreen(macro.macroRow + localR, macro.macroCol + localC);
+  return { x: p.x, y: p.y + AGENT_FOOT_OFFSET_Y };
 }
 
 // --- Walk animation -------------------------------------------------------
@@ -139,16 +199,17 @@ function stopWalkFrameCycle(scene, agent) {
 }
 
 // Tween from current (x,y) to target (x,y). Keeps __sortY synced to the
-// agent's current screen y so depth sort updates as we move.
-function tweenAgentTo(scene, agent, targetX, targetY, duration, onComplete) {
-  // Cancel any leftover idle-bob or movement tween on this agent.
+// agent's current screen y so depth sort updates as we move. Use ease:'Linear'
+// for chained tile-to-tile walks so the agent doesn't slow down at every
+// tile boundary.
+function tweenAgentTo(scene, agent, targetX, targetY, duration, onComplete, ease = 'Sine.easeInOut') {
   scene.tweens.killTweensOf(agent);
   scene.tweens.add({
     targets: agent,
     x: targetX,
     y: targetY,
     duration,
-    ease: 'Sine.easeInOut',
+    ease,
     onUpdate: () => { agent.__sortY = agent.y; },
     onComplete: () => {
       agent.__sortY = agent.y;
@@ -229,35 +290,41 @@ function walkPath(scene, agent, room, path, onComplete) {
   }
   const next = path.shift();
   const target = roomTileScreenPos(scene, room, next.r, next.c);
-  const prev = agent.__roomLocalRC ?? { r: 1, c: 2 }; // chair tile
+  const prev = agent.__roomLocalRC ?? agent.__homeRC ?? { r: 2, c: 1 };
   const prevDir = agent.direction;
   agent.direction = dirForStep(next.r - prev.r, next.c - prev.c);
   agent.__roomLocalRC = next;
   startWalkFrameCycle(scene, agent, prevDir !== agent.direction);
   tweenAgentTo(scene, agent, target.x, target.y, WALK_TILE_DURATION_MS, () => {
     walkPath(scene, agent, room, path, onComplete);
-  });
+  }, 'Linear');
 }
 
 function enterWalking(scene, agent, room) {
   agent.behaviorState = 'WALKING';
   stopIdleBob(scene, agent);
   if (agent.__reactReturnTimer) { agent.__reactReturnTimer.remove(false); agent.__reactReturnTimer = null; }
-  // Pick 1..3 wander hops, plus a final hop back to the chair.
-  const hops = WALK_HOPS_MIN + Math.floor(Math.random() * (WALK_HOPS_MAX - WALK_HOPS_MIN + 1));
-  const path = [];
-  for (let i = 0; i < hops; i++) path.push(pickRandomInRoomTile(agent));
-  // Chair tile (1, 2) is the return target — but the chair sits at the
-  // furniture-shifted position, so we walk to the tile center first, then
-  // ease back to the rest position.
-  path.push({ r: 1, c: 2 });
+
+  // Pick one wander destination, then BFS-path out to it and back to the
+  // agent's home tile. Each entry in `path` is an adjacent step, so the
+  // screen-space tween between successive tiles is exactly one iso diagonal
+  // — the agent walks along the grid, never cutting across corners.
+  const home = agent.__homeRC ?? { r: 2, c: 1 };
+  const start = agent.__roomLocalRC ?? home;
+  const dest = pickRandomInRoomTile(agent);
+  let path = [];
+  if (dest) {
+    const out  = findTilePath(room, start, dest);
+    const back = findTilePath(room, dest, home);
+    if (out && back) path = [...out, ...back];
+  }
+  if (path.length === 0) {
+    enterSittingState(scene, agent, agent.__lastSittingState ?? 'SITTING_IDLE');
+    return;
+  }
   walkPath(scene, agent, room, path, () => {
-    // Snap back to the chair offset position and resume sitting.
     stopWalkFrameCycle(scene, agent);
-    agent.direction = 'front';
-    tweenAgentTo(scene, agent, agent.restX, agent.restY, 250, () => {
-      enterSittingState(scene, agent, agent.__lastSittingState ?? 'SITTING_IDLE');
-    });
+    enterSittingState(scene, agent, agent.__lastSittingState ?? 'SITTING_IDLE');
   });
 }
 
@@ -279,12 +346,16 @@ export function spawnAgent(scene, { room, characterIndex, direction = 'front' })
   }
   if (queued && !scene.load.isLoading()) scene.load.start();
 
-  // Chair-tile screen pos, with the same quarter-tile shift applied to
-  // furniture, so the agent stays centered in the (shifted) chair.
-  const chairScreen = chairScreenPos(scene, room);
+  // Home tile = where the agent spawns, sits, and returns to after walking.
+  // Picked per-room so the agent never overlaps with furniture / walls.
+  // Use roomTileScreenPos so the spawn lands on the same foot-plant point
+  // that walking targets use — agent never visually snaps between sit/walk.
+  const home = pickHomeTile(room);
+  const macro = room.macroCoords;
+  const homeScreen = roomTileScreenPos(scene, room, home.r, home.c);
 
   const key = characterTextureKey(charIdx, 'idle', direction);
-  const agent = scene.add.image(chairScreen.x, chairScreen.y - 4, key);
+  const agent = scene.add.image(homeScreen.x, homeScreen.y, key);
   agent.setOrigin(0.5, 1);
   agent.setScale(0.32);
   agent.kind = 'agent';
@@ -295,22 +366,23 @@ export function spawnAgent(scene, { room, characterIndex, direction = 'front' })
   agent.behaviorState = 'SITTING_IDLE';
   agent.__lastSittingState = 'SITTING_IDLE';
 
-  // Resting pose anchor (the seated position, accounting for the -4 lift
-  // that gives the agent a hint of vertical separation from the chair).
-  agent.restX = chairScreen.x;
-  agent.restY = chairScreen.y - 4;
-  agent.baseY = agent.restY; // legacy alias
+  // Tile-centered rest position — feet plant exactly on the home tile center,
+  // no chair shift, no -4 lift. The walking tween snaps back here on return.
+  agent.restX = homeScreen.x;
+  agent.restY = homeScreen.y;
+  agent.__homeRC = home;
+  agent.__roomLocalRC = home;
 
-  // Sort by chair-tile center so idle bob and minor offsets don't flicker depth.
-  // Note: this is the UN-SHIFTED tile center y — depth sort uses tile y, not
-  // the shifted screen y, mirroring how Room.js sets walls/furniture __sortY.
-  const macro = room.macroCoords;
-  const chairTileCenter = scene.gridToScreen(macro.macroRow + 1, macro.macroCol + 2);
-  agent.chairSortY = chairTileCenter.y;
-  agent.__sortY = chairTileCenter.y;
+  // Depth-sort anchor: use the home tile's y so the agent layers correctly
+  // with furniture in the same room (same convention as Room.js __sortY).
+  agent.chairSortY = homeScreen.y;
+  agent.__sortY = homeScreen.y;
   // Hold a reference to the room so the walking picker can query
   // room.tiles[r][c].walkable.
   agent.__room = room;
+  // Inherit the room's back-to-front sort base so this agent renders inside
+  // its room's depth band (an entire front room fully covers any back room).
+  agent.__roomY = room.roomY;
 
   agent.setAgentState = function (state) {
     this.agentState = state;

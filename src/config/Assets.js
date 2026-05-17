@@ -13,16 +13,15 @@ export const ASSETS = {
   whiteboard:    { key: 'role_whiteboard',    path: 'office-items/whiteboard/whiteboard.png' },
   plant:         { key: 'role_plant',         path: 'office-items/plant/plant.png' },
   serverRack:    { key: 'role_serverRack',    path: 'office-items/server-rack/server-rack.png' },
-  couch:         { key: 'role_couch',         path: 'office-items/couch/couch.png' },
   cubicle:       { key: 'role_cubicle',       path: 'office-items/cubicle/cubicle.png' },
   fileCabinet:   { key: 'role_fileCabinet',   path: 'office-items/file-cabinet/file-cabinet.png' },
   lamp:          { key: 'role_lamp',          path: 'office-items/lamp/lamp.png' },
-  meetingTable:  { key: 'role_meetingTable',  path: 'office-items/meeting-table/meeting-table.png' },
   printer:       { key: 'role_printer',       path: 'office-items/printer/printer.png' },
   receptionDesk: { key: 'role_receptionDesk', path: 'office-items/reception-desk/reception-desk.png' },
   storageRack:   { key: 'role_storageRack',   path: 'office-items/storage-rack/storage-rack.png' },
   trashCan:      { key: 'role_trashCan',      path: 'office-items/trash-can/trash-can.png' },
   waterCooler:   { key: 'role_waterCooler',   path: 'office-items/water-cooler/water-cooler.png' },
+  gbrain:        { key: 'role_gbrain',        path: 'office-items/gbrain/gbrain.png' },
 };
 
 // Per-asset rendering + walkability properties.
@@ -30,22 +29,21 @@ export const ASSETS = {
 // (characters sit on them); everything else is blocking.
 // `scale`:    default sprite scale at render time.
 export const ASSET_PROPS = {
-  desk:          { scale: 0.85, walkable: false },
-  chair:         { scale: 0.60, walkable: true  },
+  desk:          { scale: 0.85, walkable: false, offsetX: 0, offsetY: 5 },
+  chair:         { scale: 0.70, walkable: true  },
   bookshelf:     { scale: 0.90, walkable: false },
-  whiteboard:    { scale: 0.95, walkable: false },
+  whiteboard:    { scale: 0.78, walkable: false },
   plant:         { scale: 0.75, walkable: false },
   serverRack:    { scale: 0.85, walkable: false },
-  couch:         { scale: 0.90, walkable: false },
   cubicle:       { scale: 0.85, walkable: false },
   fileCabinet:   { scale: 0.80, walkable: false },
-  lamp:          { scale: 0.70, walkable: false },
-  meetingTable:  { scale: 0.95, walkable: false },
+  lamp:          { scale: 0.80, walkable: false, offsetX: 10, offsetY: 0 },
   printer:       { scale: 0.75, walkable: false },
   receptionDesk: { scale: 0.90, walkable: false },
   storageRack:   { scale: 0.85, walkable: false },
   trashCan:      { scale: 0.60, walkable: true  },
   waterCooler:   { scale: 0.70, walkable: false },
+  gbrain:        { scale: 1.00, walkable: false },
 };
 
 export function assetProps(role) {
