@@ -3,3 +3,16 @@ dist/
 .vite/
 .DS_Store
 *.log
+
+# Playwright + ad-hoc screenshot artifacts from iterative dev
+.playwright-mcp/
+agentoffice-*.png
+agent-walking-*.png
+asset-shift-*.png
+task-list-*.png
+v*-zoom.png
+forge-*.png
+debug-*.png
+current-state.png
+
+.env
