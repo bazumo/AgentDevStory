@@ -4,16 +4,24 @@ import {
   CHARACTER_DIRECTIONS,
   characterTextureKey,
 } from '../config/IsoConfig.js';
+import { backend } from '../backend.js';
 
 // Character art ships transparent RGBA — no chroma-key needed.
 //
-// Public state → internal SM state mapping. The eventual real state machine
-// calls agent.setAgentState('typing' | 'success' | ...) and this drives the
-// internal behavior state machine.
+// Public agent state → internal SM state mapping. Backend agent states drive
+// the character sprite:
+//   idle     → sitting idle
+//   typing   → sitting typing (agent is working)
+//   thinking → sitting thinking (agent is deliberating)
+//   walking  → wander excursion (agent is working, keeps it visually interesting)
+//   success  → cheer reaction, then transition to sleep
+//   error    → surprised reaction (broken / needs attention)
+//   dormant  → sleeping
 const STATE_TO_SM = {
   idle:     'SITTING_IDLE',
   typing:   'SITTING_TYPING',
   thinking: 'SITTING_THINKING',
+  walking:  'WALKING',
   success:  'REACTING_CHEER',
   error:    'REACTING_SURPRISED',
   dormant:  'SLEEPING',
@@ -389,10 +397,21 @@ export function spawnAgent(scene, { room, characterIndex, direction = 'front' })
     this.agentState = state;
     const sm = STATE_TO_SM[state];
     if (!sm) return;
-    if (sm === 'REACTING_CHEER')           enterReacting(scene, this, 'cheer');
-    else if (sm === 'REACTING_SURPRISED')  enterReacting(scene, this, 'surprised');
-    else if (sm === 'SLEEPING')            enterSittingState(scene, this, 'SLEEPING');
-    else {
+    if (sm === 'WALKING') {
+      enterWalking(scene, this, room);
+    } else if (sm === 'REACTING_CHEER') {
+      enterReacting(scene, this, 'cheer');
+      // After cheering, transition to sleep (agent finished its work)
+      if (this.__cheerToSleepTimer) this.__cheerToSleepTimer.remove(false);
+      this.__cheerToSleepTimer = scene.time.delayedCall(REACT_DURATION_MS + 500, () => {
+        if (!this.active) return;
+        enterSittingState(scene, this, 'SLEEPING');
+      });
+    } else if (sm === 'REACTING_SURPRISED') {
+      enterReacting(scene, this, 'surprised');
+    } else if (sm === 'SLEEPING') {
+      enterSittingState(scene, this, 'SLEEPING');
+    } else {
       this.__lastSittingState = sm;
       enterSittingState(scene, this, sm);
     }
@@ -447,10 +466,14 @@ export function spawnAgent(scene, { room, characterIndex, direction = 'front' })
     });
   };
 
-  // Start in idle and kick off the drivers.
+  // Start in idle. Only run mock random timers when the backend is not
+  // connected — when the backend is live, agent states are driven by real
+  // Claude Code process events via setAgentState().
   enterSittingState(scene, agent, 'SITTING_IDLE');
-  scheduleNextTransition();
-  scheduleNextReaction();
+  if (!backend.connected) {
+    scheduleNextTransition();
+    scheduleNextReaction();
+  }
 
   scene.worldContainer.add(agent);
   scene.renderableList.push(agent);

@@ -14,3 +14,5 @@ v*-zoom.png
 forge-*.png
 debug-*.png
 current-state.png
+
+.env
