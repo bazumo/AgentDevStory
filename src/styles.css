@@ -342,11 +342,15 @@ html, body {
 }
 
 /* per-state dot colors mirror the agent's mood */
-.task-card-state[data-state="idle"]     .task-card-state-dot { background: #6b7280; }
-.task-card-state[data-state="typing"]   .task-card-state-dot { background: #00ff88; }
-.task-card-state[data-state="thinking"] .task-card-state-dot { background: #66aaff; }
-.task-card-state[data-state="cheer"]    .task-card-state-dot { background: #ffaa66; }
-.task-card-state[data-state="walking"]  .task-card-state-dot { background: #c084fc; }
+.task-card-state[data-state="idle"]      .task-card-state-dot { background: #6b7280; }
+.task-card-state[data-state="typing"]    .task-card-state-dot { background: #00ff88; }
+.task-card-state[data-state="thinking"]  .task-card-state-dot { background: #66aaff; }
+.task-card-state[data-state="executing"] .task-card-state-dot { background: #ffd066; }
+.task-card-state[data-state="cheer"]     .task-card-state-dot { background: #ffaa66; }
+.task-card-state[data-state="walking"]   .task-card-state-dot { background: #c084fc; }
+.task-card-state[data-state="success"]   .task-card-state-dot { background: #00ff88; }
+.task-card-state[data-state="error"]     .task-card-state-dot { background: #ff5555; }
+.task-card-state[data-state="dormant"]   .task-card-state-dot { background: #4b5563; }
 
 /* nudge the topbar so it floats above the left panel without overlapping ugly */
 #topbar { left: 300px; }

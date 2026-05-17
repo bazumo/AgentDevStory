@@ -11,6 +11,10 @@ interface AgentProcess {
   lastOutputAt: number;
   outputChunks: number;
   outputBuffer: string[];
+  // Buffer for partial JSONL lines from stdout.
+  lineBuf: string;
+  // Set true when an active tool_use is in flight; cleared on tool_result.
+  inToolUse: boolean;
 }
 
 export class AgentManager extends EventEmitter {
@@ -71,7 +75,15 @@ export class AgentManager extends EventEmitter {
     this.emitTerminal(roomId, 'system', `Workspace: ${workDir}`);
     this.emitTerminal(roomId, 'system', `Prompt: ${prompt}`);
 
-    const args = ['-p', prompt, '--dangerously-skip-permissions'];
+    // stream-json + --verbose makes claude emit newline-delimited JSON events
+    // (assistant/user/tool_use/tool_result/result), letting us distinguish
+    // 'executing' (tool_use in flight) from 'typing' (text streaming).
+    const args = [
+      '-p', prompt,
+      '--output-format', 'stream-json',
+      '--verbose',
+      '--dangerously-skip-permissions',
+    ];
 
     let cmd: string;
     let spawnArgs: string[];
@@ -96,6 +108,8 @@ export class AgentManager extends EventEmitter {
       lastOutputAt: Date.now(),
       outputChunks: 0,
       outputBuffer: [],
+      lineBuf: '',
+      inToolUse: false,
     };
     this.agents.set(roomId, agent);
     this.updateState(roomId, 'thinking');
@@ -106,12 +120,26 @@ export class AgentManager extends EventEmitter {
       agent.outputChunks++;
       agent.outputBuffer.push(text);
 
-      const nextState: AgentState =
-        agent.outputChunks % 8 === 0 ? 'walking' : 'typing';
-      this.updateState(roomId, nextState);
-
-      for (const line of text.split('\n')) {
-        if (line.trim()) this.emitTerminal(roomId, 'agent', line);
+      // Newline-delimited JSON. Buffer partial lines across chunks.
+      agent.lineBuf += text;
+      const lines = agent.lineBuf.split('\n');
+      agent.lineBuf = lines.pop() ?? '';
+      for (const line of lines) {
+        const t = line.trim();
+        if (!t) continue;
+        // If a line isn't JSON, treat as plain agent text.
+        if (t[0] !== '{') {
+          this.emitTerminal(roomId, 'agent', t);
+          continue;
+        }
+        let evt: any;
+        try {
+          evt = JSON.parse(t);
+        } catch {
+          this.emitTerminal(roomId, 'agent', t);
+          continue;
+        }
+        this.handleClaudeEvent(roomId, agent, evt);
       }
     });
 
@@ -190,6 +218,70 @@ export class AgentManager extends EventEmitter {
     const agent = this.agents.get(roomId);
     if (agent) agent.state = state;
     this.emit('agent:state', { roomId, state });
+  }
+
+  // Map a Claude Code stream-json event to a state transition + terminal lines.
+  // Event shapes (Claude Code 2.x):
+  //   { type: 'system', subtype: 'init', ... }                                  no-op
+  //   { type: 'assistant', message: { content: [{ type, ... }] } }              text or tool_use
+  //   { type: 'user',      message: { content: [{ type: 'tool_result', ... }] } }
+  //   { type: 'result', ... }                                                   final summary
+  private handleClaudeEvent(roomId: string, agent: AgentProcess, evt: any): void {
+    if (!evt || typeof evt !== 'object') return;
+    if (evt.type === 'system') return;
+
+    if (evt.type === 'assistant' && evt.message?.content) {
+      let sawText = false;
+      let sawTool = false;
+      for (const c of evt.message.content) {
+        if (!c) continue;
+        if (c.type === 'tool_use') {
+          sawTool = true;
+          agent.inToolUse = true;
+          const argsPreview =
+            c.input && typeof c.input === 'object'
+              ? Object.keys(c.input).slice(0, 3).join(', ')
+              : '';
+          this.emitTerminal(
+            roomId,
+            'system',
+            `→ tool: ${c.name}${argsPreview ? ` (${argsPreview})` : ''}`,
+          );
+        } else if (c.type === 'text' && c.text) {
+          sawText = true;
+          for (const line of String(c.text).split('\n')) {
+            if (line.trim()) this.emitTerminal(roomId, 'agent', line);
+          }
+        }
+      }
+      if (sawTool)      this.updateState(roomId, 'executing');
+      else if (sawText) this.updateState(roomId, 'typing');
+      return;
+    }
+
+    if (evt.type === 'user' && evt.message?.content) {
+      let sawResult = false;
+      for (const c of evt.message.content) {
+        if (c?.type === 'tool_result') {
+          sawResult = true;
+          const isErr = c.is_error === true;
+          const text = typeof c.content === 'string' ? c.content : '';
+          const preview = text.split('\n')[0].slice(0, 120);
+          this.emitTerminal(
+            roomId,
+            isErr ? 'error' : 'shell',
+            `← ${isErr ? 'error' : 'result'}${preview ? `: ${preview}` : ''}`,
+          );
+        }
+      }
+      if (sawResult) {
+        agent.inToolUse = false;
+        this.updateState(roomId, 'thinking');
+      }
+      return;
+    }
+
+    // 'result' event: final summary — exit handler writes success/error.
   }
 
   private emitTerminal(roomId: string, kind: TerminalLine['kind'], text: string): void {

@@ -1,5 +1,13 @@
 export type RoomType = 'forge' | 'warroom' | 'blueprint' | 'lounge';
-export type AgentState = 'idle' | 'typing' | 'thinking' | 'walking' | 'success' | 'error' | 'dormant';
+export type AgentState =
+  | 'idle'       // no claude process running
+  | 'typing'     // claude is streaming text content to stdout
+  | 'thinking'   // claude is reasoning (no recent output)
+  | 'executing'  // claude is mid tool_use (Bash/Edit/Read/etc.)
+  | 'walking'    // client-only — random wander
+  | 'success'    // claude exited 0
+  | 'error'      // claude exited non-0
+  | 'dormant';   // long pause / done
 
 export interface Room {
   id: string;

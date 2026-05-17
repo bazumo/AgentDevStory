@@ -291,7 +291,7 @@ function scheduleWanderWalk(scene, agent) {
     // Only walk if still in an active sitting state (might have transitioned
     // to idle, reacting, sleeping, or already walking in between).
     const s = agent.behaviorState;
-    if (s !== 'SITTING_TYPING' && s !== 'SITTING_THINKING') return;
+    if (s !== 'SITTING_TYPING' && s !== 'SITTING_THINKING' && s !== 'SITTING_EXECUTING') return;
     if (!agent.__room) return;
     enterWalking(scene, agent, agent.__room);
     // enterSittingState will re-arm wander on return via __lastSittingState.
