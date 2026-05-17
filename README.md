@@ -1,71 +1,95 @@
 # AgentDevStory / AgentOffice
 
-Isometric visual canvas for monitoring multiple long-running AI coding sessions as a sprawling office floor. Each new session spawns a 5×5 office tile cluster along a clockwise spiral, with a character sprite seated at the desk reacting to the session's state (typing / thinking / success / error / dormant).
+> **Demo:** https://screen.studio/share/2JABmEkb
 
-This iteration is the **visual canvas + UI shell** only. Real WebSocket backend, `./workspace/` directory creation, `chokidar` watcher, and `gbrain` graph sync are the next phase (see "Roadmap" below). For now, the classifier, agent activity, and shell are mocked client-side.
+![AgentOffice scene](docs/hero.png)
+
+Isometric visual canvas for monitoring multiple long-running Claude Code sessions as a sprawling office floor. Each Linear issue spawns a room with a sprite that reacts to the live session state (`idle` / `typing` / `thinking` / `executing` / `success` / `error` / `dormant`). The room's archetype (Forge / War Room / Blueprint Lab / Lounge) is picked from the issue's labels.
 
 ## Stack
 
-- Phaser 3 (canvas / iso rendering)
-- Vite (dev + build)
-- Vanilla JS / CSS for the DOM overlay (top bar, new-task modal, slide-over terminal)
-- `localStorage` for state persistence (stand-in for `state.json`)
+- **Phaser 3** — iso canvas, depth-banded rendering (`floor → wall → asset → sprite`), per-room sort, pinch-to-zoom, click-drag pan
+- **Vite** — dev server + bundler for the client
+- **Node + Express + ws + tsx** — backend at `:4317` that spawns `claude` subprocesses, parses `--output-format stream-json`, and pipes events to the canvas over WebSocket
+- **Linear API** — source of truth for tasks; agent state changes get mirrored back as comments and state transitions
+- **G-Brain** — local knowledge layer; each agent writes its workspace into the shared graph so neighbouring rooms can semantic-search prior work
 
 ## Run
 
 ```bash
-npm install
-npm run dev
+npm install                 # client deps
+npm --prefix server install # server deps
+npm run dev:all             # vite at :5173 + backend at :4317
 ```
 
-Open http://127.0.0.1:5173.
+The backend needs a `.env` (see `server/src/index.ts` for the full list) — minimum: `LINEAR_API_KEY`, `LINEAR_TEAM_ID`, plus your `claude` CLI on PATH.
 
-## What works
-
-- **+ New Task** button → opens a prompt modal. Heuristic keyword classifier picks one of four room types:
-  - 🏭 The Forge — feature building (`build`, `feature`, `implement`, `add`, ...)
-  - 🚨 The War Room — debugging (`bug`, `fix`, `error`, `stack trace`, ...)
-  - 📐 The Blueprint Lab — architecture (`schema`, `design`, `prompt`, `db`, ...)
-  - 📚 The Lounge — docs (`readme`, `doc`, `explain`, `tutorial`, ...)
-- Rooms are placed on a clockwise spiral around origin `(0,0)`, with 1-tile corridor gaps.
-- Each room is a 5×5 iso tile cluster with floor diamonds, NW + NE walls (iso open-front convention), a desk at `(2,2)`, type-specific decorators (laptops / chairs / server racks / whiteboards / plants), and a randomly-assigned character sprite.
-- **Click a desk** → camera tweens the office to the left half of the screen, slide-over terminal opens on the right.
-- **Terminal**:
-  - Plain Enter → mock agent reply, typewriter-streamed.
-  - `! ls`, `! cat <file>`, `! pwd`, `! help` → mock virtual shell against an in-memory workspace.
-- **Camera pan**: click-drag empty floor, or `WASD` / arrow keys.
-- **Depth sort**: per-frame `setDepth(y + bias)` then `worldContainer.sort('depth')` — walls bias `-4`, agents `+4`.
-- **Persistence**: spawned rooms round-trip through `localStorage` and re-spawn on reload.
-- **Mock activity loop**: every ~1.8s each agent flips to a random state (idle / thinking / typing / cheer / surprised / sleep) so the sprites visibly cycle.
-
-## Source layout
+## Project layout
 
 ```
 src/
-  main.js                  Phaser bootstrap + UI init
-  ui.js                    DOM overlay: new-task modal + terminal panel + mock shell/LLM
-  styles.css
+  main.js                     Phaser bootstrap + UI init + WebSocket connect
+  ui.js                       Left sessions panel, terminal slide-over, new-task modal
+  backend.js                  WebSocket client + room-sync cache
+  api.js                      REST glue
+  styles.css                  CRT terminal aesthetic, task cards, integrations
   config/
-    IsoConfig.js           Named ISO constants + character key helpers
-    RoomTypes.js           Room registry + keyword classifier
+    Assets.js                 Asset registry + per-role scale/walkable props
+    IsoConfig.js              ISO constants, focus offsets, world origin
+    RoomTypes.js              Room archetype metadata + keyword classifier
   scenes/
-    AgencyFloorScene.js    Main scene: preload, container, sort, pan, click-to-center
+    AgencyFloorScene.js       Scene, depth bands, camera pan/zoom, click-vs-drag
   util/
-    spiral.js              Clockwise spiral macro-coord generator
-    persistence.js         localStorage round-trip
+    spiral.js                 Clockwise spiral macro-coord generator
+    persistence.js            localStorage round-trip (fallback when no backend)
+    chromaKey.js              Legacy white-bg → transparent (unused with new art)
   world/
-    Room.js                5×5 spawn (floor diamonds, iso walls, desk, per-type decorators)
-    Agent.js               Character sprite + state→pose mapping + mock activity loop
+    Backdrop.js               Agency mega-floor: grass + paths + trees + lamps + fountain
+    Room.js                   5×5 spawn (floors, walls, asset matrix, walkability)
+    RoomLayouts.js            Per-type 5×5 grids (back→front, role names or null)
+    Agent.js                  Sprite state machine + pathfinding wander + walk frames
+server/
+  src/
+    index.ts                  Express + ws + REST + Linear sync + agent lifecycle
+    agent-manager.ts          Spawns claude, parses stream-json events into AgentStates
+    linear.ts                 GraphQL client, issue → room mapping
+    gbrain.ts                 Knowledge-layer sync on agent success
+    types.ts                  Shared API contract (AgentState, Room, etc.)
 assets/
-  web_office/              Furniture PNGs (desk, chair, laptop, server_rack, plant, whiteboard)
-  characters/character-XX/ 10 chars × 5 states × 4 directions = 200 poses
+  office-items/               64×64 iso furniture sprites (16 roles)
+  characters/character-XX/    10 chars × 6 emotion poses × 4 directions + walk frames
+  gbrain/                     The big pink brain at the spawn hub
 ```
 
-## Roadmap (next phases — out of scope for this iteration)
+## State machine
 
-- **Real backend.** Node WebSocket server. `ROOM_SPAWN` / `AGENT_MOVE` / `AGENT_STATE` / `TERMINAL_STREAM` / `TERMINAL_INPUT` events per spec. Replace mock activity loop.
-- **Real workspace dirs.** Per-task `./workspace/<task>/` creation; `state.json` instead of `localStorage`.
-- **Live agent threads.** Wire each room to an actual Claude / Codex session with filesystem MCP scoped to its workspace.
-- **gbrain integration.** `gbrain serve` running locally; chokidar-driven sync on agent success state; cross-room semantic search.
-- **Walking agents.** `AGENT_MOVE` paths animated on the iso grid, with the spritesheet's directional poses.
-- **Bounding-box camera clamp.**
+```
+Linear         backend AgentState       sprite SM            pose
+─────────      ──────────────────       ──────────────       ─────────────
+Todo           idle                     SITTING_IDLE         idle
+In Progress    typing                   SITTING_TYPING       typing
+               thinking                 SITTING_THINKING     thinking
+               executing  (tool_use)    SITTING_EXECUTING    typing
+               (server walk hint)       WALKING              walk-1/walk-2
+In Review      success                  REACTING_CHEER       cheer  (5s)
+               error                    REACTING_SURPRISED   surprised (5s)
+               dormant                  SLEEPING             sleep
+```
+
+When `claude -p <prompt> --output-format stream-json --verbose` emits a `tool_use` event, the backend flips state to `executing`; on `tool_result` it flips back to `thinking`. The sprite picks up state changes via the websocket and routes them through `setAgentState(externalState)` in `src/world/Agent.js`.
+
+## Controls
+
+- **Click** a room (any floor tile) — auto-focus camera, slide-over terminal opens
+- **Click-drag** — pan the camera
+- **WASD / arrow keys** — keyboard pan
+- **Two-finger pinch** (trackpad) or **Ctrl+wheel** (mouse) — zoom (0.4× – 2.5×)
+- **`! cmd`** in the terminal — virtual shell (`! ls`, `! cat <file>`, `! pwd`, `! help`)
+- Plain Enter in the terminal — sends to the active Claude session
+
+## Roadmap
+
+- Walking-agent paths between rooms (cross-room visits — currently sprites only walk within their own room)
+- gbrain semantic search surfaced as a side panel
+- Multi-user — second sprite + named ownership per room
+- Camera bounding-box clamp so the world doesn't pan off into the void
