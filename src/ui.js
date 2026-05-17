@@ -1,4 +1,5 @@
 import { ROOM_TYPES } from './config/RoomTypes.js';
+import { describeHits, queryGBrain, rememberGBrain } from './gbrain.js';
 
 const MOCK_FILES_BY_TYPE = {
   forge: {
@@ -52,6 +53,24 @@ const MOCK_AGENT_LINES = {
 
 function pickRandom(arr) {
   return arr[Math.floor(Math.random() * arr.length)];
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function taskStatusForAgentState(state) {
+  if (state === 'success' || state === 'done') return 'done';
+  if (state === 'error') return 'blocked';
+  if (state === 'thinking') return 'review';
+  if (state === 'memory' || state === 'typing' || state === 'walking') return 'doing';
+  return 'todo';
+}
+
+function setRoomState(roomId, state, taskStatus = taskStatusForAgentState(state)) {
+  window.dispatchEvent(new CustomEvent('agentoffice:gbrain-state', {
+    detail: { roomId, state, taskStatus },
+  }));
 }
 
 class TaskSpawner {
@@ -110,7 +129,7 @@ class TerminalUI {
       e.preventDefault();
       const v = this.input.value;
       if (!v.trim()) return;
-      this.handleInput(v);
+      void this.handleInput(v);
       this.input.value = '';
     });
     window.addEventListener('agentoffice:room-selected', (e) => this.open(e.detail));
@@ -128,7 +147,7 @@ class TerminalUI {
       this.appendLine('agent', `[${payload.label}] session attached — ${ROOM_TYPES[payload.roomType]?.ambient ?? ''}`);
       if (payload.prompt) {
         this.appendLine('user', payload.prompt);
-        this.streamAgentReply(payload);
+        void this.streamAgentReply(payload);
       }
     }
     this.renderLogs();
@@ -141,7 +160,7 @@ class TerminalUI {
     this.activeRoom = null;
   }
 
-  handleInput(raw) {
+  async handleInput(raw) {
     if (!this.activeRoom) return;
     if (raw.startsWith('! ')) {
       const cmd = raw.slice(2).trim();
@@ -151,7 +170,7 @@ class TerminalUI {
       this.appendLine('shell', "usage: ! ls   |   ! cat <file>");
     } else {
       this.appendLine('user', raw);
-      this.streamAgentReply({ ...this.activeRoom, prompt: raw });
+      await this.streamAgentReply({ ...this.activeRoom, prompt: raw });
     }
   }
 
@@ -182,16 +201,47 @@ class TerminalUI {
     this.appendLine('error', `${cmd}: command not found (try: help)`);
   }
 
-  streamAgentReply(payload) {
+  async streamAgentReply(payload) {
+    setRoomState(payload.roomId, 'memory');
+    this.appendLine('agent', '[g-brain] Walking to G-Brain to retrieve relevant memory', payload.roomId);
+    await delay(350);
+    const { source, hits } = await queryGBrain(payload.prompt ?? '');
+    this.appendLine('agent', `[g-brain] ${describeHits(hits)}${source === 'server' ? ' (server)' : ''}`, payload.roomId);
+    setRoomState(payload.roomId, 'thinking');
+    await delay(250);
+
     const lines = MOCK_AGENT_LINES[payload.roomType] ?? MOCK_AGENT_LINES.forge;
     const line = pickRandom(lines);
+    const log = this.logsByRoom.get(payload.roomId);
+    if (!log) return;
+    if (this.activeRoom?.roomId !== payload.roomId) {
+      log.push({ kind: 'agent', text: line });
+      setRoomState(payload.roomId, 'success');
+      void rememberGBrain({
+        sourceSessionId: payload.roomId,
+        title: payload.prompt ?? payload.roomId,
+        text: `${payload.prompt ?? ''}\n${line}`,
+      });
+      return;
+    }
     const el = document.createElement('span');
     el.className = 'line line-agent';
     el.textContent = '· ';
     this.log.appendChild(el);
+    setRoomState(payload.roomId, 'typing');
     let i = 0;
     const tick = () => {
-      if (i >= line.length) { this.scrollLog(); return; }
+      if (i >= line.length) {
+        this.scrollLog();
+        log.push({ kind: 'agent', text: line });
+        setRoomState(payload.roomId, 'success');
+        void rememberGBrain({
+          sourceSessionId: payload.roomId,
+          title: payload.prompt ?? payload.roomId,
+          text: `${payload.prompt ?? ''}\n${line}`,
+        });
+        return;
+      }
       el.textContent = '· ' + line.slice(0, ++i);
       this.scrollLog();
       setTimeout(tick, 14);
@@ -199,9 +249,11 @@ class TerminalUI {
     tick();
   }
 
-  appendLine(kind, text) {
-    const log = this.logsByRoom.get(this.activeRoom.roomId);
+  appendLine(kind, text, roomId = this.activeRoom?.roomId) {
+    const log = this.logsByRoom.get(roomId);
+    if (!log) return null;
     log.push({ kind, text });
+    if (this.activeRoom?.roomId !== roomId) return null;
     const el = document.createElement('span');
     el.className = `line line-${kind}`;
     el.textContent =
@@ -270,31 +322,77 @@ function tintToCss(tint) {
   return '#' + (tint ?? 0xffffff).toString(16).padStart(6, '0');
 }
 
+const KANBAN_COLUMNS = [
+  { id: 'todo', label: 'Todo' },
+  { id: 'doing', label: 'In Progress' },
+  { id: 'review', label: 'Review' },
+  { id: 'done', label: 'Done' },
+  { id: 'blocked', label: 'Blocked' },
+];
+
+function columnForRoom(room) {
+  return room.taskStatus ?? taskStatusForAgentState(room.agent?.agentState ?? 'idle');
+}
+
+function statusTextForRoom(room) {
+  const taskStatus = columnForRoom(room).replace('-', ' ');
+  const agentState = room.agent?.agentState ?? 'idle';
+  return `${taskStatus} · ${agentState}`;
+}
+
 class TaskListUI {
   constructor() {
     this.panel = document.getElementById('task-list-panel');
     this.itemsEl = this.panel.querySelector('[data-bind="items"]');
     this.countEl = this.panel.querySelector('[data-bind="count"]');
     this.toggleBtn = this.panel.querySelector('.task-list-toggle');
+    this.headerEl = this.panel.querySelector('.task-list-header');
     this.activeRoomId = null;
+    this.viewMode = localStorage.getItem('agentoffice:task-view') || 'sessions';
     // Track last-rendered signature so we only rebuild the DOM on real changes.
     this.lastSig = '';
+
+    this.tabsEl = document.createElement('div');
+    this.tabsEl.className = 'task-list-tabs';
+    this.tabsEl.innerHTML = `
+      <button class="task-list-tab" type="button" data-view="sessions">Sessions</button>
+      <button class="task-list-tab" type="button" data-view="kanban">Kanban</button>
+    `;
+    this.headerEl.after(this.tabsEl);
 
     if (localStorage.getItem('agentoffice:tasks-collapsed') === '1') {
       this.setCollapsed(true);
     }
+    this.setView(this.viewMode, { persist: false });
     this.toggleBtn?.addEventListener('click', () => {
       this.setCollapsed(!this.panel.classList.contains('collapsed'));
+    });
+    this.tabsEl.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-view]');
+      if (!btn) return;
+      this.setView(btn.dataset.view);
     });
 
     window.addEventListener('agentoffice:room-selected', (e) => {
       this.activeRoomId = e.detail?.roomId ?? null;
       this.refresh();
     });
+    window.addEventListener('agentoffice:gbrain-state', () => {
+      this.refresh(true);
+    });
 
     // Poll the scene — simpler than threading new events through the scene
     // and cheap enough at 500ms with O(rooms) work.
     setInterval(() => this.refresh(), 500);
+  }
+
+  setView(view, { persist = true } = {}) {
+    this.viewMode = view === 'kanban' ? 'kanban' : 'sessions';
+    for (const btn of this.tabsEl.querySelectorAll('[data-view]')) {
+      btn.classList.toggle('active', btn.dataset.view === this.viewMode);
+    }
+    if (persist) localStorage.setItem('agentoffice:task-view', this.viewMode);
+    this.refresh(true);
   }
 
   setCollapsed(collapsed) {
@@ -308,19 +406,27 @@ class TaskListUI {
     return scene?.rooms ?? [];
   }
 
-  refresh() {
+  refresh(force = false) {
     const rooms = this._getRooms();
     // Signature includes anything that affects render: id, prompt, state, active.
     const sig = rooms
-      .map(r => `${r.roomId}|${r.roomType}|${r.prompt}|${r.agent?.agentState ?? ''}|${r.roomId === this.activeRoomId ? 1 : 0}`)
-      .join('::');
-    if (sig === this.lastSig) return;
+      .map(r => `${r.roomId}|${r.roomType}|${r.prompt}|${r.taskStatus ?? ''}|${r.agent?.agentState ?? ''}|${r.roomId === this.activeRoomId ? 1 : 0}`)
+      .join('::') + '##' + this.viewMode;
+    if (!force && sig === this.lastSig) return;
     this.lastSig = sig;
     this.render(rooms);
   }
 
   render(rooms) {
     this.countEl.textContent = String(rooms.length);
+    if (this.viewMode === 'kanban') {
+      this.renderKanban(rooms);
+      return;
+    }
+    this.renderSessions(rooms);
+  }
+
+  renderSessions(rooms) {
     if (rooms.length === 0) {
       this.itemsEl.innerHTML = `<div class="task-list-empty">${emptyStateHTML()}</div>`;
       return;
@@ -330,6 +436,7 @@ class TaskListUI {
       const meta = ROOM_TYPES[room.roomType] ?? ROOM_TYPES.forge;
       const tintCss = tintToCss(meta.tint);
       const state = room.agent?.agentState ?? 'idle';
+      const status = statusTextForRoom(room);
 
       const card = document.createElement('div');
       card.className = 'task-card' + (room.roomId === this.activeRoomId ? ' active' : '');
@@ -361,7 +468,7 @@ class TaskListUI {
       dot.className = 'task-card-state-dot';
       stateEl.appendChild(dot);
       const stateText = document.createElement('span');
-      stateText.textContent = state;
+      stateText.textContent = status;
       stateEl.appendChild(stateText);
 
       card.appendChild(head);
@@ -371,6 +478,69 @@ class TaskListUI {
       card.addEventListener('click', () => this._select(room.roomId));
       this.itemsEl.appendChild(card);
     }
+  }
+
+  renderKanban(rooms) {
+    this.itemsEl.innerHTML = '';
+
+    if (rooms.length === 0) {
+      this.itemsEl.innerHTML = `<div class="task-list-empty">${emptyStateHTML()}</div>`;
+      return;
+    }
+
+    const board = document.createElement('div');
+    board.className = 'kanban-board';
+
+    for (const column of KANBAN_COLUMNS) {
+      const colEl = document.createElement('section');
+      colEl.className = 'kanban-column';
+      colEl.dataset.column = column.id;
+
+      const colRooms = rooms.filter((room) => columnForRoom(room) === column.id);
+      const header = document.createElement('header');
+      header.className = 'kanban-column-header';
+      header.innerHTML = `<span>${column.label}</span><span>${colRooms.length}</span>`;
+      colEl.appendChild(header);
+
+      const body = document.createElement('div');
+      body.className = 'kanban-column-body';
+      if (!colRooms.length) {
+        const empty = document.createElement('div');
+        empty.className = 'kanban-empty';
+        empty.textContent = 'empty';
+        body.appendChild(empty);
+      }
+
+      for (const room of colRooms) {
+        const meta = ROOM_TYPES[room.roomType] ?? ROOM_TYPES.forge;
+        const card = document.createElement('button');
+        card.type = 'button';
+        card.className = 'kanban-card' + (room.roomId === this.activeRoomId ? ' active' : '');
+        card.addEventListener('click', () => this._select(room.roomId));
+
+        const title = document.createElement('span');
+        title.className = 'kanban-card-title';
+        title.textContent = room.prompt ?? '(no prompt)';
+        card.appendChild(title);
+
+        const cardMeta = document.createElement('span');
+        cardMeta.className = 'kanban-card-meta';
+        cardMeta.textContent = `${meta.label} · ${room.roomId}`;
+        card.appendChild(cardMeta);
+
+        const state = document.createElement('span');
+        state.className = 'kanban-card-state';
+        state.textContent = statusTextForRoom(room);
+        card.appendChild(state);
+
+        body.appendChild(card);
+      }
+
+      colEl.appendChild(body);
+      board.appendChild(colEl);
+    }
+
+    this.itemsEl.appendChild(board);
   }
 
   _select(roomId) {

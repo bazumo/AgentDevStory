@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:gbrain": "bun run server/src/index.ts",
+    "dev:all": "sh -c 'bun run dev:gbrain & server_pid=$!; npm run dev; kill $server_pid'",
     "build": "vite build",
     "preview": "vite preview"
   },

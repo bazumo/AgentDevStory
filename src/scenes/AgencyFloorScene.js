@@ -21,6 +21,7 @@ export class AgencyFloorScene extends Phaser.Scene {
   }
 
   preload() {
+    this.load.image('gbrain_core', 'gbrain/front-right.png');
     for (const role of ASSET_ROLES) {
       const a = ASSETS[role];
       this.load.image(a.key, a.path);
@@ -60,6 +61,7 @@ export class AgencyFloorScene extends Phaser.Scene {
     for (const obj of backdrop) {
       if (obj.kind === 'scenery') this.renderableList.push(obj);
     }
+    this.spawnGBrainCore();
 
     this.scale.on('resize', (gameSize) => {
       this.worldContainer.x = gameSize.width / 2 + this.worldContainer.__panX;
@@ -68,6 +70,11 @@ export class AgencyFloorScene extends Phaser.Scene {
     window.addEventListener('agentoffice:new-task', (e) => {
       const { prompt } = e.detail ?? {};
       this.spawnRoomFromPrompt(prompt ?? 'untitled task');
+    });
+
+    window.addEventListener('agentoffice:gbrain-state', (e) => {
+      const { roomId, state, taskStatus } = e.detail ?? {};
+      this.setGBrainAgentState(roomId, state, taskStatus);
     });
 
     this.setupCameraPan();
@@ -80,6 +87,7 @@ export class AgencyFloorScene extends Phaser.Scene {
         roomType: r.roomType,
         characterIndex: r.characterIndex,
         roomId: r.roomId,
+        taskStatus: r.taskStatus,
       });
     }
   }
@@ -122,6 +130,74 @@ export class AgencyFloorScene extends Phaser.Scene {
     this.selectDesk(room.desk);
   }
 
+  spawnGBrainCore() {
+    const p = this.gridToScreen(0, 0);
+    this.gbrainTarget = { x: p.x, y: p.y + 14 };
+
+    const shadow = this.add.ellipse(p.x, p.y + 42, ISO.TILE_WIDTH * 2, ISO.TILE_HEIGHT * 1.25, 0x0b1020, 0.42);
+    shadow.kind = 'gbrain';
+    shadow.__sortY = p.y + 44;
+    this.worldContainer.add(shadow);
+
+    const glow = this.add.ellipse(p.x, p.y + 10, ISO.TILE_WIDTH * 2, ISO.TILE_HEIGHT * 2, 0x66aaff, 0.18);
+    glow.kind = 'gbrain';
+    glow.__sortY = p.y + 45;
+    this.worldContainer.add(glow);
+
+    const core = this.add.image(p.x, p.y + 40, 'gbrain_core');
+    core.setOrigin(0.5, 1);
+    core.setScale(0.18);
+    core.kind = 'gbrain';
+    core.__sortY = p.y + 46;
+    this.worldContainer.add(core);
+
+    const label = this.add.text(p.x, p.y + 50, 'G-BRAIN', {
+      fontFamily: 'monospace',
+      fontSize: '10px',
+      color: '#dbeafe',
+      stroke: '#0b1020',
+      strokeThickness: 3,
+    });
+    label.setOrigin(0.5, 0);
+    label.kind = 'fx';
+    label.__sortY = p.y + 55;
+    this.worldContainer.add(label);
+
+    this.tweens.add({
+      targets: glow,
+      alpha: { from: 0.12, to: 0.34 },
+      scaleX: { from: 0.9, to: 1.12 },
+      scaleY: { from: 0.9, to: 1.12 },
+      duration: 1600,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut',
+    });
+
+    this.tweens.add({
+      targets: [core, label],
+      y: '-=8',
+      duration: 1700,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut',
+      onUpdate: () => {
+        core.__sortY = core.y + 6;
+        label.__sortY = label.y + 5;
+      },
+    });
+
+    this.renderableList.push(shadow, glow, core, label);
+  }
+
+  setGBrainAgentState(roomId, state, taskStatus) {
+    const room = this.rooms.find(r => r.roomId === roomId);
+    if (!room?.agent) return;
+    if (taskStatus) room.taskStatus = taskStatus;
+    if (state) room.agent.setAgentState(state);
+    this._persist();
+  }
+
   selectDesk(desk) {
     const room = this.rooms.find((r) => r.desk === desk);
     if (!room) return;
@@ -149,6 +225,7 @@ export class AgencyFloorScene extends Phaser.Scene {
       roomType: room.roomType,
       label: meta.label,
       prompt: room.prompt,
+      taskStatus: room.taskStatus ?? 'todo',
     };
     this.events.emit('room:selected', payload);
     window.dispatchEvent(new CustomEvent('agentoffice:room-selected', { detail: payload }));
@@ -161,8 +238,8 @@ export class AgencyFloorScene extends Phaser.Scene {
     return room;
   }
 
-  _spawnRoom({ prompt, roomType, characterIndex, roomId }) {
-    const index = this.roomCounter++;
+  _spawnRoom({ prompt, roomType, characterIndex, roomId, taskStatus = 'todo' }) {
+    const index = ++this.roomCounter;
     const macroCoords = getSpiralCoordinates(index);
 
     if (!roomId) {
@@ -176,6 +253,7 @@ export class AgencyFloorScene extends Phaser.Scene {
 
     const room = spawnOfficeRoom(this, { roomId, macroCoords, roomType });
     room.prompt = prompt;
+    room.taskStatus = taskStatus;
     spawnAgent(this, { room, characterIndex });
     this.rooms.push(room);
     return room;
@@ -187,6 +265,7 @@ export class AgencyFloorScene extends Phaser.Scene {
       prompt: r.prompt,
       roomType: r.roomType,
       characterIndex: r.agent?.characterIndex,
+      taskStatus: r.taskStatus ?? 'todo',
     }));
     saveState({ rooms });
   }
@@ -232,6 +311,7 @@ export class AgencyFloorScene extends Phaser.Scene {
         case 'wall':         obj.depth =  1000 + (obj.__sortY ?? obj.y); break;
         case 'furniture':    obj.depth =  2000 + (obj.__sortY ?? obj.y); break;
         case 'desk':         obj.depth =  2100 + (obj.__sortY ?? obj.y); break;
+        case 'gbrain':       obj.depth =  2500 + (obj.__sortY ?? obj.y); break;
         case 'agent':        obj.depth =  3000 + (obj.__sortY ?? obj.y); break;
         case 'fx':           obj.depth = 10000 + obj.y; break;
         default:             obj.depth =       (obj.__sortY ?? obj.y);
