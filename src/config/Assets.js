@@ -21,7 +21,6 @@ export const ASSETS = {
   storageRack:   { key: 'role_storageRack',   path: 'office-items/storage-rack/storage-rack.png' },
   trashCan:      { key: 'role_trashCan',      path: 'office-items/trash-can/trash-can.png' },
   waterCooler:   { key: 'role_waterCooler',   path: 'office-items/water-cooler/water-cooler.png' },
-  gbrain:        { key: 'role_gbrain',        path: 'office-items/gbrain/gbrain.png' },
 };
 
 // Per-asset rendering + walkability properties.
@@ -43,7 +42,6 @@ export const ASSET_PROPS = {
   storageRack:   { scale: 0.85, walkable: false },
   trashCan:      { scale: 0.60, walkable: true  },
   waterCooler:   { scale: 0.70, walkable: false },
-  gbrain:        { scale: 1.00, walkable: false },
 };
 
 export function assetProps(role) {

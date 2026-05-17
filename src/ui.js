@@ -1,4 +1,5 @@
 import { ROOM_TYPES } from './config/RoomTypes.js';
+import { backend } from './backend.js';
 
 const MOCK_FILES_BY_TYPE = {
   forge: {
@@ -114,6 +115,25 @@ class TerminalUI {
       this.input.value = '';
     });
     window.addEventListener('agentoffice:room-selected', (e) => this.open(e.detail));
+
+    // Backend terminal output stream
+    window.addEventListener('backend:terminal:output', (e) => {
+      const { roomId, kind, text } = e.detail ?? {};
+      if (!roomId || !text) return;
+
+      // Store in local log buffer
+      if (!this.logsByRoom.has(roomId)) this.logsByRoom.set(roomId, []);
+      this.logsByRoom.get(roomId).push({ kind, text });
+
+      // Render if this room's terminal is active
+      if (this.activeRoom?.roomId === roomId) {
+        const el = document.createElement('span');
+        el.className = `line line-${kind}`;
+        el.textContent = kind === 'agent' ? `· ${text}` : text;
+        this.log.appendChild(el);
+        this.scrollLog();
+      }
+    });
   }
 
   open(payload) {
@@ -143,6 +163,18 @@ class TerminalUI {
 
   handleInput(raw) {
     if (!this.activeRoom) return;
+
+    // Route through backend when connected
+    if (backend.connected) {
+      this.appendLine('user', raw);
+      backend.send('terminal:input', {
+        roomId: this.activeRoom.roomId,
+        input: raw,
+      });
+      return;
+    }
+
+    // Fallback: local mock
     if (raw.startsWith('! ')) {
       const cmd = raw.slice(2).trim();
       this.appendLine('user', raw);

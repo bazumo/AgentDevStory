@@ -12,6 +12,7 @@ import { spawnOfficeRoom } from '../world/Room.js';
 import { spawnAgent, startMockActivityLoop } from '../world/Agent.js';
 import { drawAgencyFloor } from '../world/Backdrop.js';
 import { loadState, saveState } from '../util/persistence.js';
+import { backend } from '../backend.js';
 import { chromaKeyAll } from '../util/chromaKey.js';
 import { ASSETS, ASSET_ROLES } from '../config/Assets.js';
 
@@ -67,20 +68,85 @@ export class AgencyFloorScene extends Phaser.Scene {
 
     window.addEventListener('agentoffice:new-task', (e) => {
       const { prompt } = e.detail ?? {};
-      this.spawnRoomFromPrompt(prompt ?? 'untitled task');
+      if (backend.connected) {
+        backend.send('room:create', { title: prompt ?? 'untitled task' });
+      } else {
+        this.spawnRoomFromPrompt(prompt ?? 'untitled task');
+      }
     });
 
     this.setupCameraPan();
     startMockActivityLoop(this);
 
-    const saved = loadState();
-    for (const r of saved.rooms) {
-      this._spawnRoom({
-        prompt: r.prompt,
-        roomType: r.roomType,
-        characterIndex: r.characterIndex,
-        roomId: r.roomId,
-      });
+    // Backend-driven room sync — shared handler for both cached and live events
+    const applyRoomsSync = (backendRooms) => {
+      for (const r of backendRooms) {
+        if (!this.rooms.find((x) => x.roomId === r.id)) {
+          this._spawnRoom({
+            roomId: r.id,
+            prompt: r.title,
+            roomType: r.roomType,
+            characterIndex: r.characterIndex,
+          });
+        }
+      }
+    };
+
+    window.addEventListener('backend:rooms:sync', (e) => {
+      applyRoomsSync(e.detail?.rooms ?? []);
+    });
+
+    window.addEventListener('backend:room:created', (e) => {
+      const r = e.detail;
+      if (r && !this.rooms.find((x) => x.roomId === r.id)) {
+        this._spawnRoom({
+          roomId: r.id,
+          prompt: r.title,
+          roomType: r.roomType,
+          characterIndex: r.characterIndex,
+        });
+      }
+    });
+
+    window.addEventListener('backend:room:updated', (e) => {
+      const r = e.detail;
+      if (!r) return;
+      const room = this.rooms.find((x) => x.roomId === r.id);
+      if (room?.agent) {
+        room.agent.setAgentState?.(r.agentState);
+      }
+    });
+
+    window.addEventListener('backend:room:removed', (e) => {
+      const id = e.detail?.id;
+      const idx = this.rooms.findIndex((x) => x.roomId === id);
+      if (idx !== -1) this.rooms.splice(idx, 1);
+    });
+
+    // On (re)connect, request a fresh room list
+    window.addEventListener('backend:connected', () => {
+      backend.send('rooms:request', {});
+    });
+
+    // Apply any rooms:sync that arrived while Phaser was still loading assets.
+    // The backend.js caches the last sync payload so we don't miss it.
+    if (backend.lastRoomsSync) {
+      applyRoomsSync(backend.lastRoomsSync.rooms ?? []);
+    } else if (backend.connected) {
+      backend.send('rooms:request', {});
+    }
+
+    // Fallback: load from localStorage when backend is not available at all
+    if (!backend.connected && !backend.lastRoomsSync) {
+      const saved = loadState();
+      for (const r of saved.rooms) {
+        this._spawnRoom({
+          prompt: r.prompt,
+          roomType: r.roomType,
+          characterIndex: r.characterIndex,
+          roomId: r.roomId,
+        });
+      }
     }
   }
 
