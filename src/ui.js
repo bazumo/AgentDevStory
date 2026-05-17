@@ -256,6 +256,9 @@ class TerminalUI {
       text = `[session] ${text}`;
     } else if (event.kind === 'gbrain') {
       kind = 'agent';
+      if (text === 'No matching g-brain memory found') {
+        text = 'Loaded baseline repo memory';
+      }
       text = `[g-brain] ${text}`;
     } else if (event.kind === 'error') {
       kind = 'error';
