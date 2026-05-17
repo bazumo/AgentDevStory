@@ -40,7 +40,7 @@ const SM_TO_POSE = {
 // Walk tuning.
 const WALK_FRAME_MS         = 220;   // walk-1 / walk-2 cycle interval
 const WALK_TILE_DURATION_MS = 520;   // time to traverse one tile (adjacent step)
-const REACT_DURATION_MS     = 1500;
+const REACT_DURATION_MS     = 5000;
 
 // gridToScreen(r, c) returns the tile CENTER directly — Room.js draws each
 // floor diamond with vertices symmetric around that point (see Room.js
@@ -270,6 +270,39 @@ function enterSittingState(scene, agent, smState) {
   setPose(scene, agent, SM_TO_POSE[smState], 'front');
   if (smState !== 'SLEEPING') startIdleBob(scene, agent);
   else stopIdleBob(scene, agent);
+  // For TYPING / THINKING (active "working" states), schedule occasional
+  // pacing walks so the agent doesn't sit motionless. The walk returns to
+  // this same sitting state on completion via __lastSittingState.
+  if (smState === 'SITTING_TYPING' || smState === 'SITTING_THINKING') {
+    scheduleWanderWalk(scene, agent);
+  } else {
+    cancelWanderWalk(agent);
+  }
+}
+
+// Schedule a one-shot "pacing walk" while the agent is in typing/thinking.
+// The transition driver still runs in parallel — this is an extra source of
+// movement so an agent who stays in typing for 30s+ doesn't look frozen.
+function scheduleWanderWalk(scene, agent) {
+  cancelWanderWalk(agent);
+  const delay = 5000 + Math.floor(Math.random() * 5000); // 5–10s
+  agent.__wanderTimer = scene.time.delayedCall(delay, () => {
+    if (!agent.active) return;
+    // Only walk if still in an active sitting state (might have transitioned
+    // to idle, reacting, sleeping, or already walking in between).
+    const s = agent.behaviorState;
+    if (s !== 'SITTING_TYPING' && s !== 'SITTING_THINKING') return;
+    if (!agent.__room) return;
+    enterWalking(scene, agent, agent.__room);
+    // enterSittingState will re-arm wander on return via __lastSittingState.
+  });
+}
+
+function cancelWanderWalk(agent) {
+  if (agent.__wanderTimer) {
+    agent.__wanderTimer.remove(false);
+    agent.__wanderTimer = null;
+  }
 }
 
 function enterReacting(scene, agent, flavor /* 'cheer' | 'surprised' */) {
