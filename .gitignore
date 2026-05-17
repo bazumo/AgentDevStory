@@ -3,6 +3,10 @@ dist/
 .vite/
 .DS_Store
 *.log
+.env
+.agentdevstory/
+bun.lock
+symphony/*.local.md
 
 # Playwright + ad-hoc screenshot artifacts from iterative dev
 .playwright-mcp/

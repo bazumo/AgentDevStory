@@ -1,4 +1,12 @@
 import { ROOM_TYPES } from './config/RoomTypes.js';
+import {
+  createSession,
+  fetchSession,
+  fetchSymphonyStatus,
+  fetchTeams,
+  sendSessionInput,
+  syncSymphony,
+} from './api.js';
 
 const MOCK_FILES_BY_TYPE = {
   forge: {
@@ -26,15 +34,15 @@ const MOCK_FILES_BY_TYPE = {
 const MOCK_AGENT_LINES = {
   forge: [
     'scaffolding component tree...',
-    "wrote handlers in src/api/route.js",
+    'wrote handlers in src/api/route.js',
     'wiring state into store...',
-    'ran tests — all green',
+    'ran tests - all green',
   ],
   warroom: [
     'reproduced the crash locally',
     'isolated null pointer in handler()',
     'patch staged, running regression suite',
-    'fix verified — no more 500s',
+    'fix verified - no more 500s',
   ],
   blueprint: [
     'sketching entity relationships...',
@@ -46,7 +54,7 @@ const MOCK_AGENT_LINES = {
     'pulling existing copy...',
     'restructured intro for clarity',
     'added a quickstart section',
-    'doc lint pass — clean',
+    'doc lint pass - clean',
   ],
 };
 
@@ -71,15 +79,35 @@ class TaskSpawner {
       e.preventDefault();
       const v = this.input.value.trim();
       if (!v) return;
-      window.dispatchEvent(new CustomEvent('agentoffice:new-task', { detail: { prompt: v } }));
-      this.input.value = '';
-      this.close();
+      void this.submit(v);
     });
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && this.modal.getAttribute('aria-hidden') === 'false') {
         this.close();
       }
     });
+  }
+
+  async submit(prompt) {
+    const backendConnected = Boolean(window.__agentoffice?.backendConnected);
+    if (backendConnected) {
+      try {
+        await createSession(prompt);
+      } catch (error) {
+        console.error('[AgentOffice] Failed to create backend session', error);
+        window.dispatchEvent(new CustomEvent('agentoffice:new-task-error', {
+          detail: { prompt, message: error instanceof Error ? error.message : String(error) },
+        }));
+        return;
+      }
+      this.input.value = '';
+      this.close();
+      return;
+    }
+
+    window.dispatchEvent(new CustomEvent('agentoffice:new-task', { detail: { prompt } }));
+    this.input.value = '';
+    this.close();
   }
 
   open() {
@@ -104,16 +132,18 @@ class TerminalUI {
     this.activeRoom = null;
     this.logsByRoom = new Map();
     this.fsByRoom = new Map();
+    this.seenEventIds = new Set();
 
     this.closeBtn.addEventListener('click', () => this.close());
     this.form.addEventListener('submit', (e) => {
       e.preventDefault();
       const v = this.input.value;
       if (!v.trim()) return;
-      this.handleInput(v);
+      void this.handleInput(v);
       this.input.value = '';
     });
     window.addEventListener('agentoffice:room-selected', (e) => this.open(e.detail));
+    window.addEventListener('agentoffice:session-update', (e) => this.onSessionUpdate(e.detail));
   }
 
   open(payload) {
@@ -125,14 +155,119 @@ class TerminalUI {
     if (!this.logsByRoom.has(payload.roomId)) {
       this.logsByRoom.set(payload.roomId, []);
       this.fsByRoom.set(payload.roomId, { ...(MOCK_FILES_BY_TYPE[payload.roomType] ?? {}) });
-      this.appendLine('agent', `[${payload.label}] session attached — ${ROOM_TYPES[payload.roomType]?.ambient ?? ''}`);
-      if (payload.prompt) {
-        this.appendLine('user', payload.prompt);
-        this.streamAgentReply(payload);
+      if (payload.backendConnected && payload.sessionId) {
+        void this.loadSessionTranscript(payload.sessionId);
+      } else {
+        this.appendLine('agent', `[${payload.label}] session attached - ${ROOM_TYPES[payload.roomType]?.ambient ?? ''}`);
+        if (payload.prompt) {
+          this.appendLine('user', payload.prompt);
+          this.streamAgentReply(payload);
+        }
       }
+    } else if (payload.backendConnected && payload.sessionId) {
+      void this.loadSessionTranscript(payload.sessionId);
     }
+
     this.renderLogs();
     setTimeout(() => this.input.focus(), 50);
+  }
+
+  async loadSessionTranscript(sessionId) {
+    const roomId = this.activeRoom?.roomId;
+    if (!roomId || roomId !== sessionId) return;
+    const log = this.logsByRoom.get(roomId);
+    if (!log) return;
+
+    const session = await fetchSession(sessionId);
+    if (!session?.transcript?.length) {
+      if (log.length === 0) this.appendLine('agent', '[session] waiting for Codex events...');
+      return;
+    }
+
+    for (const event of session.transcript) {
+      this.recordTranscriptEvent(sessionId, event);
+    }
+    if (this.activeRoom?.roomId === sessionId) this.renderLogs();
+  }
+
+  recordTranscriptEvent(sessionId, event) {
+    if (!event?.id || this.seenEventIds.has(event.id)) return;
+    this.seenEventIds.add(event.id);
+
+    const log = this.logsByRoom.get(sessionId);
+    if (!log) return;
+
+    let kind = 'agent';
+    let text = event.message ?? '';
+
+    if (event.kind === 'user') {
+      kind = 'user';
+    } else if (event.kind === 'stdout') {
+      try {
+        const parsed = JSON.parse(text);
+        if (parsed.type === 'thread.started') {
+          text = `[codex] thread started ${parsed.thread_id ? String(parsed.thread_id).slice(0, 12) : ''}`.trim();
+          kind = 'agent';
+        } else if (parsed.type === 'turn.started') {
+          text = '[codex] turn started';
+          kind = 'agent';
+        } else if (parsed.type === 'turn.completed') {
+          text = '[codex] turn completed';
+          kind = 'agent';
+        } else if (parsed.type === 'item.completed' && parsed.item?.type === 'agent_message') {
+          text = parsed.item.text;
+          kind = 'agent';
+        } else if (parsed.type === 'item.completed' && parsed.item?.type === 'error') {
+          text = parsed.item.message ?? text;
+          kind = 'error';
+        } else if (parsed.type === 'item.completed' && parsed.item?.type === 'command_execution') {
+          const cmd = parsed.item.command || '';
+          const output = parsed.item.aggregated_output || '';
+          log.push({
+            kind: 'shell',
+            text: `$ ${cmd.replace(/^\/bin\/bash -lc /, '').replace(/^['"]|['"]$/g, '')}`,
+          });
+          if (output.trim()) {
+            log.push({ kind: 'shell', text: output.trim().slice(0, 1200) });
+          }
+          return;
+        } else if (parsed.type?.toLowerCase?.().includes('reason')) {
+          text = '[thinking]';
+          kind = 'agent';
+        } else {
+          return;
+        }
+      } catch {
+        kind = 'shell';
+      }
+    } else if (event.kind === 'stderr') {
+      if (text.toLowerCase().includes('reading prompt from stdin')) {
+        kind = 'agent';
+        text = '[codex] prompt accepted';
+      } else {
+        kind = 'error';
+      }
+    } else if (event.kind === 'lifecycle') {
+      kind = 'agent';
+      text = `[session] ${text}`;
+    } else if (event.kind === 'gbrain') {
+      kind = 'agent';
+      text = `[g-brain] ${text}`;
+    } else if (event.kind === 'error') {
+      kind = 'error';
+    } else if (event.kind === 'workspace') {
+      kind = 'shell';
+    }
+
+    log.push({ kind, text });
+  }
+
+  onSessionUpdate(session) {
+    if (!session?.id || !this.logsByRoom.has(session.id)) return;
+    for (const event of session.transcript ?? []) {
+      this.recordTranscriptEvent(session.id, event);
+    }
+    if (this.activeRoom?.roomId === session.id) this.renderLogs();
   }
 
   close() {
@@ -141,14 +276,24 @@ class TerminalUI {
     this.activeRoom = null;
   }
 
-  handleInput(raw) {
+  async handleInput(raw) {
     if (!this.activeRoom) return;
+    if (this.activeRoom.backendConnected && this.activeRoom.sessionId && !raw.startsWith('!')) {
+      this.appendLine('user', raw);
+      try {
+        await sendSessionInput(this.activeRoom.sessionId, raw);
+      } catch (error) {
+        this.appendLine('error', error instanceof Error ? error.message : String(error));
+      }
+      return;
+    }
+
     if (raw.startsWith('! ')) {
       const cmd = raw.slice(2).trim();
       this.appendLine('user', raw);
       this.runShell(cmd);
     } else if (raw === '!') {
-      this.appendLine('shell', "usage: ! ls   |   ! cat <file>");
+      this.appendLine('shell', 'usage: ! ls   |   ! cat <file>');
     } else {
       this.appendLine('user', raw);
       this.streamAgentReply({ ...this.activeRoom, prompt: raw });
@@ -172,7 +317,7 @@ class TerminalUI {
       return;
     }
     if (cmd === 'pwd') {
-      this.appendLine('shell', `./workspace/${this.activeRoom.roomId}/`);
+      this.appendLine('shell', this.activeRoom.workspacePath ?? `./workspace/${this.activeRoom.roomId}/`);
       return;
     }
     if (cmd === 'help') {
@@ -233,8 +378,6 @@ class TerminalUI {
   }
 }
 
-// Emojis live only as comments in RoomLayouts; map them here so the task list
-// gets visual glyphs without touching world/ or config/ owned by other agents.
 const ROOM_TYPE_EMOJI = {
   forge:     '🏭',
   warroom:   '🚨',
@@ -243,31 +386,66 @@ const ROOM_TYPE_EMOJI = {
 };
 
 const INTEGRATIONS = [
-  { id: 'linear',  name: 'Linear',         color: '#5E6AD2' },
-  { id: 'trello',  name: 'Trello',         color: '#0079BF' },
-  { id: 'jira',    name: 'Jira',           color: '#2684FF' },
-  { id: 'github',  name: 'GitHub Issues',  color: '#c9d1d9' },
-  { id: 'asana',   name: 'Asana',          color: '#F06A6A' },
-  { id: 'notion',  name: 'Notion',         color: '#e6e6e6' },
+  { id: 'linear', name: 'Linear', color: '#5E6AD2' },
+  { id: 'symphony', name: 'Symphony', color: '#00C2FF' },
+  { id: 'codex', name: 'Codex Agents', color: '#00ff88' },
+  { id: 'gbrain', name: 'G-Brain Memory', color: '#66aaff' },
 ];
 
-function emptyStateHTML() {
-  const buttons = INTEGRATIONS.map(svc => `
+function integrationStatus(svc, world) {
+  const backend = world?.backend;
+  if (!backend) return { label: 'checking', configured: false };
+  if (svc.id === 'linear') return { label: backend.linearConfigured ? 'connected' : 'needs key', configured: backend.linearConfigured };
+  if (svc.id === 'symphony') return { label: backend.symphonyConfigured ? 'syncing' : 'needs url', configured: backend.symphonyConfigured };
+  if (svc.id === 'codex') return { label: backend.targetRepoConfigured && backend.agentExecutableFound ? 'ready' : 'offline', configured: backend.targetRepoConfigured && backend.agentExecutableFound };
+  if (svc.id === 'gbrain') return { label: backend.gbrainConfigured ? 'ready' : 'offline', configured: backend.gbrainConfigured };
+  return { label: 'unknown', configured: false };
+}
+
+function integrationsHTML(world) {
+  return INTEGRATIONS.map((svc) => {
+    const status = integrationStatus(svc, world);
+    return `
       <button class="integration-btn" type="button" data-svc="${svc.id}">
         <span class="integration-dot" style="--svc:${svc.color}"></span>
         <span class="integration-name">${svc.name}</span>
-        <span class="integration-arrow">›</span>
-      </button>`).join('');
+        <span class="integration-status${status.configured ? ' connected' : ''}">${status.label}</span>
+      </button>`;
+  }).join('');
+}
+
+function emptyStateHTML(world) {
   return `
-    <p class="empty-msg">no sessions yet — spawn one with + New Task</p>
+    <p class="empty-msg">no sessions yet - spawn one with + New Task</p>
     <div class="empty-divider"><span>or connect</span></div>
-    <div class="integration-list">${buttons}</div>
+    <div class="integration-list">${integrationsHTML(world)}</div>
   `;
 }
 
-// 0xRRGGBB int -> css hex (RoomTypes.tint is a Phaser-friendly integer)
 function tintToCss(tint) {
   return '#' + (tint ?? 0xffffff).toString(16).padStart(6, '0');
+}
+
+const KANBAN_COLUMNS = [
+  { id: 'todo', label: 'Todo' },
+  { id: 'doing', label: 'In Progress' },
+  { id: 'review', label: 'Review' },
+  { id: 'done', label: 'Done' },
+  { id: 'blocked', label: 'Blocked' },
+];
+
+function columnForIssue(issue, session) {
+  const runState = issue?.runState ?? '';
+  const state = `${issue?.state ?? ''} ${issue?.stateType ?? ''}`.toLowerCase();
+  const status = session?.status ?? '';
+
+  if (runState === 'failed' || status === 'failed') return 'blocked';
+  if (runState === 'running' || status === 'running') return 'doing';
+  if (runState === 'completed' || runState === 'terminal' || status === 'completed') return 'done';
+  if (state.includes('review')) return 'review';
+  if (state.includes('progress') || state.includes('started')) return 'doing';
+  if (state.includes('blocked')) return 'blocked';
+  return 'todo';
 }
 
 class TaskListUI {
@@ -276,25 +454,66 @@ class TaskListUI {
     this.itemsEl = this.panel.querySelector('[data-bind="items"]');
     this.countEl = this.panel.querySelector('[data-bind="count"]');
     this.toggleBtn = this.panel.querySelector('.task-list-toggle');
+    this.headerEl = this.panel.querySelector('.task-list-header');
     this.activeRoomId = null;
-    // Track last-rendered signature so we only rebuild the DOM on real changes.
+    this.world = null;
+    this.viewMode = localStorage.getItem('agentoffice:task-view') || 'sessions';
     this.lastSig = '';
+
+    this.tabsEl = document.createElement('div');
+    this.tabsEl.className = 'task-list-tabs';
+    this.tabsEl.innerHTML = `
+      <button class="task-list-tab" type="button" data-view="sessions">Sessions</button>
+      <button class="task-list-tab" type="button" data-view="kanban">Kanban</button>
+    `;
+    this.headerEl.after(this.tabsEl);
+
+    this.noticeEl = document.createElement('div');
+    this.noticeEl.className = 'task-list-notice';
+    this.noticeEl.hidden = true;
+    this.tabsEl.after(this.noticeEl);
 
     if (localStorage.getItem('agentoffice:tasks-collapsed') === '1') {
       this.setCollapsed(true);
     }
+    this.setView(this.viewMode, { persist: false });
     this.toggleBtn?.addEventListener('click', () => {
       this.setCollapsed(!this.panel.classList.contains('collapsed'));
     });
-
+    this.tabsEl.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-view]');
+      if (!btn) return;
+      this.setView(btn.dataset.view);
+    });
+    this.itemsEl.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-svc]');
+      if (!btn) return;
+      e.preventDefault();
+      e.stopPropagation();
+      void this.handleIntegrationAction(btn.dataset.svc);
+    });
     window.addEventListener('agentoffice:room-selected', (e) => {
       this.activeRoomId = e.detail?.roomId ?? null;
-      this.refresh();
+      this.refresh(true);
     });
-
-    // Poll the scene — simpler than threading new events through the scene
-    // and cheap enough at 500ms with O(rooms) work.
+    window.addEventListener('agentoffice:world-update', (e) => {
+      this.world = e.detail ?? null;
+      this.refresh(true);
+    });
+    window.addEventListener('agentoffice:session-update', (e) => {
+      this.upsertSession(e.detail);
+      this.refresh(true);
+    });
     setInterval(() => this.refresh(), 500);
+  }
+
+  setView(view, { persist = true } = {}) {
+    this.viewMode = view === 'kanban' ? 'kanban' : 'sessions';
+    for (const btn of this.tabsEl.querySelectorAll('[data-view]')) {
+      btn.classList.toggle('active', btn.dataset.view === this.viewMode);
+    }
+    if (persist) localStorage.setItem('agentoffice:task-view', this.viewMode);
+    this.refresh(true);
   }
 
   setCollapsed(collapsed) {
@@ -308,28 +527,59 @@ class TaskListUI {
     return scene?.rooms ?? [];
   }
 
-  refresh() {
-    const rooms = this._getRooms();
-    // Signature includes anything that affects render: id, prompt, state, active.
-    const sig = rooms
-      .map(r => `${r.roomId}|${r.roomType}|${r.prompt}|${r.agent?.agentState ?? ''}|${r.roomId === this.activeRoomId ? 1 : 0}`)
-      .join('::');
-    if (sig === this.lastSig) return;
-    this.lastSig = sig;
-    this.render(rooms);
+  upsertSession(session) {
+    if (!session?.id) return;
+    if (!this.world) {
+      this.world = {
+        generatedAt: new Date().toISOString(),
+        mode: 'unconfigured',
+        backend: {},
+        projects: [],
+        sessions: [],
+      };
+    }
+
+    const sessions = [...(this.world.sessions ?? [])];
+    const idx = sessions.findIndex((item) => item.id === session.id);
+    if (idx >= 0) sessions[idx] = session;
+    else sessions.unshift(session);
+    this.world = { ...this.world, sessions };
   }
 
-  render(rooms) {
-    this.countEl.textContent = String(rooms.length);
-    if (rooms.length === 0) {
-      this.itemsEl.innerHTML = `<div class="task-list-empty">${emptyStateHTML()}</div>`;
+  refresh(force = false) {
+    const rooms = this._getRooms();
+    const kanbanItems = this._kanbanItems();
+    const sig = rooms
+      .map(r => `${r.roomId}|${r.roomType}|${r.prompt}|${r.session?.status ?? ''}|${r.agent?.agentState ?? ''}|${r.roomId === this.activeRoomId ? 1 : 0}`)
+      .join('::') + '##' + this.viewMode + '##' + kanbanItems
+      .map(item => `${item.id}|${item.sessionId ?? ''}|${item.column}|${item.runState}|${item.status}`)
+      .join('::');
+    if (!force && sig === this.lastSig) return;
+    this.lastSig = sig;
+    this.render(rooms, kanbanItems);
+  }
+
+  render(rooms, kanbanItems) {
+    this.countEl.textContent = String(this.viewMode === 'kanban' ? kanbanItems.length : rooms.length);
+    if (this.viewMode === 'kanban') {
+      this.renderKanban(kanbanItems);
       return;
     }
+    this.renderSessions(rooms);
+  }
+
+  renderSessions(rooms) {
+    if (rooms.length === 0) {
+      this.itemsEl.innerHTML = `<div class="task-list-empty">${emptyStateHTML(this.world)}</div>`;
+      return;
+    }
+
     this.itemsEl.innerHTML = '';
     for (const room of rooms) {
       const meta = ROOM_TYPES[room.roomType] ?? ROOM_TYPES.forge;
       const tintCss = tintToCss(meta.tint);
       const state = room.agent?.agentState ?? 'idle';
+      const status = room.session?.status ? `${state} · ${room.session.status}` : state;
 
       const card = document.createElement('div');
       card.className = 'task-card' + (room.roomId === this.activeRoomId ? ' active' : '');
@@ -361,16 +611,167 @@ class TaskListUI {
       dot.className = 'task-card-state-dot';
       stateEl.appendChild(dot);
       const stateText = document.createElement('span');
-      stateText.textContent = state;
+      stateText.textContent = status;
       stateEl.appendChild(stateText);
 
       card.appendChild(head);
       card.appendChild(prompt);
       card.appendChild(stateEl);
-
       card.addEventListener('click', () => this._select(room.roomId));
       this.itemsEl.appendChild(card);
     }
+  }
+
+  renderKanban(items) {
+    this.itemsEl.innerHTML = '';
+
+    const status = document.createElement('div');
+    status.className = 'kanban-integration-list';
+    status.innerHTML = integrationsHTML(this.world);
+    this.itemsEl.appendChild(status);
+
+    const board = document.createElement('div');
+    board.className = 'kanban-board';
+
+    for (const column of KANBAN_COLUMNS) {
+      const colEl = document.createElement('section');
+      colEl.className = 'kanban-column';
+      colEl.dataset.column = column.id;
+
+      const colItems = items.filter((item) => item.column === column.id);
+      const header = document.createElement('header');
+      header.className = 'kanban-column-header';
+      header.innerHTML = `<span>${column.label}</span><span>${colItems.length}</span>`;
+      colEl.appendChild(header);
+
+      const body = document.createElement('div');
+      body.className = 'kanban-column-body';
+      if (!colItems.length) {
+        const empty = document.createElement('div');
+        empty.className = 'kanban-empty';
+        empty.textContent = 'empty';
+        body.appendChild(empty);
+      }
+
+      for (const item of colItems) {
+        const card = document.createElement('button');
+        card.type = 'button';
+        card.className = 'kanban-card';
+        if (item.sessionId) card.dataset.sessionId = item.sessionId;
+
+        const title = document.createElement('span');
+        title.className = 'kanban-card-title';
+        title.textContent = item.title;
+        card.appendChild(title);
+
+        const meta = document.createElement('span');
+        meta.className = 'kanban-card-meta';
+        meta.textContent = `${item.identifier} · ${item.projectName}`;
+        card.appendChild(meta);
+
+        const state = document.createElement('span');
+        state.className = 'kanban-card-state';
+        state.textContent = item.statusText;
+        card.appendChild(state);
+
+        card.disabled = !item.sessionId;
+        card.addEventListener('click', () => {
+          if (item.sessionId) this._select(item.sessionId);
+        });
+        body.appendChild(card);
+      }
+
+      colEl.appendChild(body);
+      board.appendChild(colEl);
+    }
+
+    if (!items.length) {
+      const empty = document.createElement('div');
+      empty.className = 'task-list-empty';
+      empty.innerHTML = `<p class="empty-msg">no Linear issues or Codex sessions yet</p>`;
+      this.itemsEl.appendChild(empty);
+    }
+
+    this.itemsEl.appendChild(board);
+  }
+
+  _kanbanItems() {
+    const world = this.world;
+    const sessions = new Map((world?.sessions ?? []).map((session) => [session.issueId, session]));
+    const seenIssueIds = new Set();
+    const items = [];
+
+    for (const project of world?.projects ?? []) {
+      for (const issue of project.issues ?? []) {
+        seenIssueIds.add(issue.id);
+        const session = sessions.get(issue.id);
+        const column = columnForIssue(issue, session);
+        items.push({
+          id: issue.id,
+          sessionId: session?.id ?? null,
+          identifier: issue.identifier,
+          title: issue.title || session?.latestEvent || '(untitled)',
+          projectName: project.name ?? 'Linear',
+          runState: issue.runState ?? 'idle',
+          status: session?.status ?? issue.runState ?? 'idle',
+          statusText: session?.status ? `${session.status} · ${issue.runState}` : `${issue.state} · ${issue.runState}`,
+          column,
+        });
+      }
+    }
+
+    for (const session of world?.sessions ?? []) {
+      if (seenIssueIds.has(session.issueId)) continue;
+      items.push({
+        id: session.issueId,
+        sessionId: session.id,
+        identifier: session.issueIdentifier,
+        title: session.latestEvent ?? session.issueIdentifier,
+        projectName: 'Codex',
+        runState: session.status,
+        status: session.status,
+        statusText: session.status,
+        column: columnForIssue(null, session),
+      });
+    }
+
+    return items;
+  }
+
+  async handleIntegrationAction(service) {
+    try {
+      if (service === 'linear') {
+        const teams = await fetchTeams();
+        this.showNotice(teams.length ? `Linear connected: ${teams.length} teams available.` : 'Linear is not configured or returned no teams.');
+      } else if (service === 'symphony') {
+        const status = await fetchSymphonyStatus();
+        if (status?.configured) {
+          await syncSymphony();
+          this.showNotice('Symphony sync published.');
+        } else {
+          this.showNotice('Symphony needs SYMPHONY_API_URL and SYMPHONY_API_KEY.');
+        }
+      } else if (service === 'codex') {
+        const backend = this.world?.backend;
+        this.showNotice(backend?.targetRepoConfigured && backend?.agentExecutableFound
+          ? `Codex ready: ${backend.agentCommand}`
+          : 'Codex is not ready. Check CODEX_CMD and target repo config.');
+      } else if (service === 'gbrain') {
+        this.showNotice('G-Brain memory is local and auto-loads before each agent run.');
+      }
+    } catch (error) {
+      this.showNotice(error instanceof Error ? error.message : String(error), 'error');
+    }
+  }
+
+  showNotice(message, tone = 'info') {
+    this.noticeEl.hidden = false;
+    this.noticeEl.dataset.tone = tone;
+    this.noticeEl.textContent = message;
+    clearTimeout(this.noticeTimer);
+    this.noticeTimer = setTimeout(() => {
+      this.noticeEl.hidden = true;
+    }, 4500);
   }
 
   _select(roomId) {

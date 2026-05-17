@@ -14,6 +14,8 @@ const STATE_TO_SM = {
   idle:     'SITTING_IDLE',
   typing:   'SITTING_TYPING',
   thinking: 'SITTING_THINKING',
+  memory:   'RETRIEVING_MEMORY',
+  done:     'REACTING_CHEER',
   success:  'REACTING_CHEER',
   error:    'REACTING_SURPRISED',
   dormant:  'SLEEPING',
@@ -41,6 +43,8 @@ const WALK_TILE_DURATION_MS = 1200;  // time to traverse one tile
 const WALK_HOPS_MIN         = 1;     // hops per excursion (tiles to wander)
 const WALK_HOPS_MAX         = 3;
 const REACT_DURATION_MS     = 1500;
+const AMBIENT_WALK_MIN_MS   = 9000;
+const AMBIENT_WALK_MAX_MS   = 18000;
 
 function characterAssetPath(charIndex, pose, direction) {
   const idx = String(charIndex).padStart(2, '0');
@@ -201,7 +205,7 @@ function enterSittingState(scene, agent, smState) {
   else stopIdleBob(scene, agent);
 }
 
-function enterReacting(scene, agent, flavor /* 'cheer' | 'surprised' */) {
+function enterReacting(scene, agent, flavor /* 'cheer' | 'surprised' */, { hold = false } = {}) {
   agent.behaviorState = flavor === 'surprised' ? 'REACTING_SURPRISED' : 'REACTING_CHEER';
   stopWalkFrameCycle(scene, agent);
   stopIdleBob(scene, agent);
@@ -211,12 +215,28 @@ function enterReacting(scene, agent, flavor /* 'cheer' | 'surprised' */) {
   agent.__sortY = agent.chairSortY;
   agent.direction = 'front';
   setPose(scene, agent, flavor, 'front');
+  if (hold) return;
   // Auto-return to a sitting state after the react window.
   if (agent.__reactReturnTimer) agent.__reactReturnTimer.remove(false);
   agent.__reactReturnTimer = scene.time.delayedCall(REACT_DURATION_MS, () => {
     if (!agent.active) return;
     enterSittingState(scene, agent, agent.__lastSittingState ?? 'SITTING_IDLE');
   });
+}
+
+function resumeCurrentStatePose(scene, agent) {
+  const sm = STATE_TO_SM[agent.agentState] ?? 'SITTING_IDLE';
+  if (sm === 'REACTING_CHEER') {
+    enterReacting(scene, agent, 'cheer', { hold: true });
+  } else if (sm === 'REACTING_SURPRISED') {
+    enterReacting(scene, agent, 'surprised', { hold: true });
+  } else if (sm === 'RETRIEVING_MEMORY') {
+    agent.__lastSittingState = 'SITTING_THINKING';
+    enterSittingState(scene, agent, 'SITTING_THINKING');
+  } else {
+    agent.__lastSittingState = sm;
+    enterSittingState(scene, agent, sm);
+  }
 }
 
 // Recursively walk one tile, then chain to the next. Returns to chair when
@@ -239,7 +259,7 @@ function walkPath(scene, agent, room, path, onComplete) {
   });
 }
 
-function enterWalking(scene, agent, room) {
+function enterWalking(scene, agent, room, { preserveCurrentState = false } = {}) {
   agent.behaviorState = 'WALKING';
   stopIdleBob(scene, agent);
   if (agent.__reactReturnTimer) { agent.__reactReturnTimer.remove(false); agent.__reactReturnTimer = null; }
@@ -256,14 +276,78 @@ function enterWalking(scene, agent, room) {
     stopWalkFrameCycle(scene, agent);
     agent.direction = 'front';
     tweenAgentTo(scene, agent, agent.restX, agent.restY, 250, () => {
-      enterSittingState(scene, agent, agent.__lastSittingState ?? 'SITTING_IDLE');
+      if (preserveCurrentState) resumeCurrentStatePose(scene, agent);
+      else enterSittingState(scene, agent, agent.__lastSittingState ?? 'SITTING_IDLE');
+    });
+  });
+}
+
+function directionForScreenDelta(dx, dy) {
+  if (Math.abs(dx) > Math.abs(dy) * 1.6) return dx > 0 ? 'right' : 'left';
+  return dy > 0 ? 'front' : 'back';
+}
+
+function enterMemoryRetrieval(scene, agent) {
+  const target = scene.gbrainTarget;
+  if (!target) {
+    agent.__lastSittingState = 'SITTING_THINKING';
+    enterSittingState(scene, agent, 'SITTING_THINKING');
+    return;
+  }
+
+  agent.behaviorState = 'RETRIEVING_MEMORY';
+  stopIdleBob(scene, agent);
+  stopWalkFrameCycle(scene, agent);
+  if (agent.__reactReturnTimer) { agent.__reactReturnTimer.remove(false); agent.__reactReturnTimer = null; }
+
+  const dx = target.x - agent.x;
+  const dy = target.y - agent.y;
+  agent.direction = directionForScreenDelta(dx, dy);
+  startWalkFrameCycle(scene, agent, true);
+
+  tweenAgentTo(scene, agent, target.x - 30, target.y + 18, 1200, () => {
+    stopWalkFrameCycle(scene, agent);
+    agent.direction = 'front';
+    setPose(scene, agent, 'thinking', 'front');
+    if (agent.__memoryReturnTimer) agent.__memoryReturnTimer.remove(false);
+    agent.__memoryReturnTimer = scene.time.delayedCall(900, () => {
+      if (!agent.active || agent.agentState !== 'memory') return;
+      agent.direction = directionForScreenDelta(agent.restX - agent.x, agent.restY - agent.y);
+      startWalkFrameCycle(scene, agent, true);
+      tweenAgentTo(scene, agent, agent.restX, agent.restY, 900, () => {
+        stopWalkFrameCycle(scene, agent);
+        agent.__lastSittingState = 'SITTING_THINKING';
+        enterSittingState(scene, agent, 'SITTING_THINKING');
+      });
     });
   });
 }
 
 // --- Public API ---------------------------------------------------------
 
-export function spawnAgent(scene, { room, characterIndex, direction = 'front' }) {
+function clearScheduledActivity(agent) {
+  for (const key of ['__transitionTimer', '__reactTimer', '__reactReturnTimer', '__memoryReturnTimer']) {
+    if (agent[key]) {
+      agent[key].remove(false);
+      agent[key] = null;
+    }
+  }
+}
+
+function scheduleAmbientWalk(scene, agent, room) {
+  const span = AMBIENT_WALK_MAX_MS - AMBIENT_WALK_MIN_MS;
+  const delay = AMBIENT_WALK_MIN_MS + Math.floor(Math.random() * span);
+  agent.__ambientWalkTimer = scene.time.delayedCall(delay, () => {
+    if (!agent.active) return;
+    const busy = agent.behaviorState === 'WALKING' || agent.behaviorState === 'RETRIEVING_MEMORY';
+    if (!busy && room?.tiles) {
+      enterWalking(scene, agent, room, { preserveCurrentState: true });
+    }
+    scheduleAmbientWalk(scene, agent, room);
+  });
+}
+
+export function spawnAgent(scene, { room, characterIndex, direction = 'front', mockDriven = true }) {
   const charIdx = characterIndex ?? (1 + Math.floor(Math.random() * CHARACTER_COUNT));
 
   // Preload walk frames so the first step doesn't show a stale (idle/typing)
@@ -294,6 +378,7 @@ export function spawnAgent(scene, { room, characterIndex, direction = 'front' })
   agent.agentState = 'idle';
   agent.behaviorState = 'SITTING_IDLE';
   agent.__lastSittingState = 'SITTING_IDLE';
+  agent.mockDriven = mockDriven;
 
   // Resting pose anchor (the seated position, accounting for the -4 lift
   // that gives the agent a hint of vertical separation from the chair).
@@ -312,12 +397,15 @@ export function spawnAgent(scene, { room, characterIndex, direction = 'front' })
   // room.tiles[r][c].walkable.
   agent.__room = room;
 
-  agent.setAgentState = function (state) {
+  agent.setAgentState = function (state, { force = false } = {}) {
+    if (!force && this.agentState === state) return;
+    if (!this.mockDriven) clearScheduledActivity(this);
     this.agentState = state;
     const sm = STATE_TO_SM[state];
     if (!sm) return;
-    if (sm === 'REACTING_CHEER')           enterReacting(scene, this, 'cheer');
-    else if (sm === 'REACTING_SURPRISED')  enterReacting(scene, this, 'surprised');
+    if (sm === 'REACTING_CHEER')           enterReacting(scene, this, 'cheer', { hold: state === 'done' || state === 'success' });
+    else if (sm === 'REACTING_SURPRISED')  enterReacting(scene, this, 'surprised', { hold: state === 'error' });
+    else if (sm === 'RETRIEVING_MEMORY')   enterMemoryRetrieval(scene, this);
     else if (sm === 'SLEEPING')            enterSittingState(scene, this, 'SLEEPING');
     else {
       this.__lastSittingState = sm;
@@ -342,15 +430,19 @@ export function spawnAgent(scene, { room, characterIndex, direction = 'front' })
       // Weighted pick: typing > thinking > walking > idle.
       const roll = Math.random();
       if (roll < 0.45) {
+        agent.agentState = 'typing';
         agent.__lastSittingState = 'SITTING_TYPING';
         enterSittingState(scene, agent, 'SITTING_TYPING');
       } else if (roll < 0.70) {
+        agent.agentState = 'thinking';
         agent.__lastSittingState = 'SITTING_THINKING';
         enterSittingState(scene, agent, 'SITTING_THINKING');
       } else if (roll < 0.90) {
         // Walk excursion — returns to last sitting state on completion.
+        agent.agentState = 'walking';
         enterWalking(scene, agent, room);
       } else {
+        agent.agentState = 'idle';
         agent.__lastSittingState = 'SITTING_IDLE';
         enterSittingState(scene, agent, 'SITTING_IDLE');
       }
@@ -374,10 +466,14 @@ export function spawnAgent(scene, { room, characterIndex, direction = 'front' })
     });
   };
 
-  // Start in idle and kick off the drivers.
+  // Start in idle and kick off the offline visual drivers only when the agent
+  // is not controlled by the backend event stream.
   enterSittingState(scene, agent, 'SITTING_IDLE');
-  scheduleNextTransition();
-  scheduleNextReaction();
+  if (mockDriven) {
+    scheduleNextTransition();
+    scheduleNextReaction();
+  }
+  scheduleAmbientWalk(scene, agent, room);
 
   scene.worldContainer.add(agent);
   scene.renderableList.push(agent);
