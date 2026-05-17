@@ -34,10 +34,10 @@ const WALK_FRAME_MS         = 220;   // walk-1 / walk-2 cycle interval
 const WALK_TILE_DURATION_MS = 520;   // time to traverse one tile (adjacent step)
 const REACT_DURATION_MS     = 1500;
 
-// gridToScreen(r, c) returns the tile's TOP CORNER (the vertex where four
-// tiles meet), not the tile center. Shift down by half a tile-height to
-// land in the actual tile center, where the agent's feet should plant.
-const AGENT_FOOT_OFFSET_Y   = ISO.TILE_HEIGHT / 2;
+// gridToScreen(r, c) returns the tile CENTER directly — Room.js draws each
+// floor diamond with vertices symmetric around that point (see Room.js
+// `diamondPoints()`). So agent feet plant exactly at gridToScreen; no
+// extra offset.
 
 function characterAssetPath(charIndex, pose, direction) {
   const idx = String(charIndex).padStart(2, '0');
@@ -148,23 +148,25 @@ function dirForStep(dr, dc) {
   // Grid-space direction picker. We can't compare raw screen-dx/dy because in
   // this iso projection a single grid step always has |dx| = 2·|dy|, so dx
   // would always win and the agent would never face front/back.
-  //   +col → 'right' (screen SE)   -col → 'left'  (screen NW)
-  //   +row → 'front' (screen SW)   -row → 'back'  (screen NE)
+  // Sprite labels in this set are camera-relative (where the viewer sits), not
+  // character-heading, so the screen-direction mapping is rotated 90°:
+  //   +col → 'front' (screen SE)   -col → 'back'  (screen NW)
+  //   +row → 'right' (screen SW)   -row → 'left'  (screen NE)
   if (Math.abs(dc) > Math.abs(dr)) {
-    return dc > 0 ? 'right' : 'left';
+    return dc > 0 ? 'front' : 'back';
   }
-  return dr >= 0 ? 'front' : 'back';
+  return dr >= 0 ? 'right' : 'left';
 }
 
 // Tile (r, c) in room-local coords → screen-space position where the agent's
-// feet should plant. gridToScreen returns the tile's TOP corner (four-tile
-// meeting vertex), so we offset by AGENT_FOOT_OFFSET_Y to reach the tile
-// center. Used identically for spawn position and walk-step targets so the
-// agent moves through tile centers, never through corner vertices.
+// feet should plant. Uses room.base (NOT room.macroCoords) — Room.js shifts
+// the visible room one grid-unit down+right from macroCoords so the macro
+// tile remains a visible plaza tile, and floor/furniture are drawn at
+// base+local. Agents must use the same anchor or they'll be off by one
+// row/col and visually drift onto neighbouring tiles' furniture.
 function roomTileScreenPos(scene, room, localR, localC) {
-  const macro = room.macroCoords;
-  const p = scene.gridToScreen(macro.macroRow + localR, macro.macroCol + localC);
-  return { x: p.x, y: p.y + AGENT_FOOT_OFFSET_Y };
+  const base = room.base ?? room.macroCoords;
+  return scene.gridToScreen(base.macroRow + localR, base.macroCol + localC);
 }
 
 // --- Walk animation -------------------------------------------------------
@@ -351,7 +353,6 @@ export function spawnAgent(scene, { room, characterIndex, direction = 'front' })
   // Use roomTileScreenPos so the spawn lands on the same foot-plant point
   // that walking targets use — agent never visually snaps between sit/walk.
   const home = pickHomeTile(room);
-  const macro = room.macroCoords;
   const homeScreen = roomTileScreenPos(scene, room, home.r, home.c);
 
   const key = characterTextureKey(charIdx, 'idle', direction);

@@ -71,6 +71,7 @@ export class AgencyFloorScene extends Phaser.Scene {
     });
 
     this.setupCameraPan();
+    this.setupPinchZoom();
     startMockActivityLoop(this);
 
     const saved = loadState();
@@ -142,6 +143,48 @@ export class AgencyFloorScene extends Phaser.Scene {
     this.openTerminalForRoom(roomId);
   }
 
+  // Two-finger pinch on macOS trackpad / Ctrl+wheel on desktop browsers.
+  // The browser surfaces pinch gestures as a wheel event with ctrlKey=true,
+  // so we listen for that and scale the worldContainer around the pointer.
+  setupPinchZoom() {
+    this.zoom = 1;
+    const MIN_ZOOM = 0.4;
+    const MAX_ZOOM = 2.5;
+
+    const onWheel = (e) => {
+      // Only zoom on pinch (browser maps trackpad pinch → ctrl+wheel).
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+
+      const rect = this.game.canvas.getBoundingClientRect();
+      const px = e.clientX - rect.left;
+      const py = e.clientY - rect.top;
+
+      const oldZoom = this.zoom;
+      // Exponential scaling so equal pinch deltas feel consistent. Trackpad
+      // deltaY is small (~1-10), mouse wheel with ctrl is ~100, so a single
+      // coefficient handles both.
+      const factor = Math.exp(-e.deltaY * 0.01);
+      const newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, oldZoom * factor));
+      if (newZoom === oldZoom) return;
+
+      // Zoom around the pointer: keep the world point under the pointer
+      // anchored while scale changes.
+      const ratio = newZoom / oldZoom;
+      this.worldContainer.x = px - (px - this.worldContainer.x) * ratio;
+      this.worldContainer.y = py - (py - this.worldContainer.y) * ratio;
+      this.worldContainer.setScale(newZoom);
+      this.zoom = newZoom;
+      // Keep pan tracking accurate under zoom.
+      this.worldContainer.__panX = this.worldContainer.x - this.cameras.main.centerX;
+      this.worldContainer.__panY = this.worldContainer.y - ISO.WORLD_ORIGIN_Y;
+    };
+
+    // Attach directly to the canvas so we can preventDefault (which Phaser's
+    // input system doesn't expose). passive:false is required for that.
+    this.game.canvas.addEventListener('wheel', onWheel, { passive: false });
+  }
+
   openTerminalForRoom(roomId) {
     const room = this.rooms.find(r => r.roomId === roomId);
     if (!room?.desk) return;
@@ -155,8 +198,14 @@ export class AgencyFloorScene extends Phaser.Scene {
 
     this.tweens.killTweensOf(this.worldContainer);
 
-    const targetX = this.cameras.main.centerX - desk.x - ISO.PANEL_OFFSET_PX;
-    const targetY = ISO.WORLD_ORIGIN_Y - desk.y;
+    // Push the focused room further left (FOCUS_X_OFFSET) and down
+    // (FOCUS_Y_OFFSET) so it lands slightly off-center, giving headroom on
+    // the top and right (where the slide-over terminal opens). Multiply
+    // desk.x/y by current zoom — under zoom, the desk's screen position is
+    // container.x + desk.x * zoom.
+    const z = this.zoom ?? 1;
+    const targetX = this.cameras.main.centerX - desk.x * z - ISO.PANEL_OFFSET_PX - ISO.FOCUS_X_OFFSET;
+    const targetY = ISO.WORLD_ORIGIN_Y - desk.y * z + ISO.FOCUS_Y_OFFSET;
 
     this.tweens.add({
       targets: this.worldContainer,

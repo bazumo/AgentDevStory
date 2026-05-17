@@ -10,6 +10,11 @@ export const ISO = Object.freeze({
   WORLD_ORIGIN_Y: 260,
   BACKDROP_RADIUS: 16,
   PANEL_OFFSET_PX: 240,
+  // Extra offset on auto-focus, in addition to PANEL_OFFSET_PX on x.
+  //   Positive X → room sits further LEFT;   Negative X → further RIGHT
+  //   Positive Y → room sits further DOWN;   Negative Y → further UP
+  FOCUS_X_OFFSET: -140,
+  FOCUS_Y_OFFSET: 220,
   CAMERA_TWEEN_MS: 500,
   KEYBOARD_PAN_SPEED: 6,
 });

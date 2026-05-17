@@ -291,7 +291,7 @@ function placeItem(scene, base, item) {
   const { x: sx, y: sy } = scene.gridToScreen(base.macroRow + r, base.macroCol + c);
   // Asset offset (independent of walls). __sortY stays pinned to tile-center sy.
   const wx = sx - (ISO.TILE_WIDTH * 8) / 16 + (item.offsetX ?? 0);  // -32px left + per-asset offset
-  const wy = sy - (ISO.TILE_HEIGHT * 1) / 8 + (item.offsetY ?? 0);  // -4px up + per-asset offset
+  const wy = sy + (ISO.TILE_HEIGHT * 1) / 8 + (item.offsetY ?? 0);   // +4px down + per-asset offset
   const sprite = scene.add.image(wx, wy, key);
   sprite.setOrigin(0.5, 1);
   sprite.setScale(item.scale ?? 0.7);
