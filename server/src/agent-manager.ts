@@ -190,9 +190,12 @@ export class AgentManager extends EventEmitter {
   }
 
   stopAll(): void {
-    for (const [roomId] of this.agents) {
-      this.stop(roomId);
+    for (const [, agent] of this.agents) {
+      try {
+        agent.proc.kill('SIGKILL');
+      } catch { /* already dead */ }
     }
+    this.agents.clear();
     if (this.idleTimer) clearInterval(this.idleTimer);
   }
 

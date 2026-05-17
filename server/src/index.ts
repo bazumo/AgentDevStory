@@ -564,15 +564,12 @@ httpServer.listen(PORT, '0.0.0.0', () => {
   }
 });
 
-process.on('SIGTERM', () => {
-  console.log('Shutting down...');
+function shutdown() {
+  console.log('\nShutting down — killing agents...');
   agents.stopAll();
   httpServer.close();
-});
+  setTimeout(() => process.exit(0), 500).unref();
+}
 
-process.on('SIGINT', () => {
-  console.log('Shutting down...');
-  agents.stopAll();
-  httpServer.close();
-  process.exit(0);
-});
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
