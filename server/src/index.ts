@@ -12,7 +12,10 @@ import { randomInt } from 'node:crypto';
 
 import { LinearClient } from './linear.js';
 import { AgentManager } from './agent-manager.js';
+import { GBrainMemory } from './gbrain.js';
 import type { Room, RoomType, AgentState, LinearIssue, WsMessageOut } from './types.js';
+
+const REPO_ROOT = resolve(__dirname, '../..');
 
 // ---------------------------------------------------------------------------
 // Config
@@ -28,6 +31,7 @@ const POLL_INTERVAL = parseInt(process.env.POLL_INTERVAL_MS ?? '10000', 10);
 const ACTIVE_STATES = (process.env.ACTIVE_LINEAR_STATES ?? 'Todo,In Progress,In Review').split(',').map(s => s.trim());
 const TERMINAL_STATES = (process.env.TERMINAL_LINEAR_STATES ?? 'Done,Canceled,Cancelled').split(',').map(s => s.trim());
 const AGENT_TRIGGER_STATES = (process.env.AGENT_TRIGGER_STATES ?? 'In Progress,In Review').split(',').map(s => s.trim());
+const GBRAIN_DATA_DIR = process.env.AGENTDEVSTORY_GBRAIN_DIR ?? resolve(WORKSPACE_ROOT, '.gbrain');
 
 // ---------------------------------------------------------------------------
 // Room type classifier (mirrors frontend RoomTypes.js)
@@ -81,6 +85,9 @@ const agents = new AgentManager({
   maxConcurrent: MAX_CONCURRENT,
 });
 
+const gbrain = new GBrainMemory(GBRAIN_DATA_DIR, REPO_ROOT);
+await gbrain.load().catch((err) => console.error('[GBrain] load failed:', err));
+
 agents.on('agent:state', ({ roomId, state }: { roomId: string; state: AgentState }) => {
   const room = rooms.get(roomId);
   if (room) {
@@ -99,7 +106,27 @@ const REVIEW_STATE = process.env.REVIEW_STATE_NAME ?? 'In Review';
 
 agents.on('agent:done', async ({ roomId, exitCode, output }: { roomId: string; exitCode: number | null; output: string }) => {
   const room = rooms.get(roomId);
-  if (!room || !linear || !room.linearIssueId) return;
+  if (!room) return;
+
+  // Persist a memory of this run regardless of Linear connectivity, so future
+  // agents can retrieve context from prior sessions.
+  try {
+    const entry = await gbrain.remember({
+      sourceSessionId: room.linearIdentifier ?? room.id,
+      title: room.title,
+      text: `[exit=${exitCode}]\n${truncateOutput(output, 6000)}`,
+    });
+    if (entry) {
+      broadcast({
+        type: 'gbrain:remember',
+        payload: { id: entry.id, title: entry.title, at: entry.at, roomId },
+      });
+    }
+  } catch (err) {
+    console.error('[GBrain] remember failed:', err);
+  }
+
+  if (!linear || !room.linearIssueId) return;
 
   if (exitCode === 0) {
     const summary = truncateOutput(output, 3000);
@@ -411,12 +438,45 @@ app.post('/api/linear/sync', async (_req, res) => {
   res.json(result);
 });
 
+app.get('/api/gbrain/health', (_req, res) => {
+  res.json({ ready: true, entries: gbrain.count });
+});
+
+app.get('/api/gbrain/search', async (req, res) => {
+  const query = String(req.query.q ?? '');
+  const rawLimit = parseInt(String(req.query.limit ?? '4'), 10);
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 20) : 4;
+  try {
+    const hits = await gbrain.search(query, limit);
+    broadcast({ type: 'gbrain:search', payload: { query, hits: hits.length } });
+    res.json({ hits });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post('/api/gbrain/remember', async (req, res) => {
+  try {
+    const entry = await gbrain.remember(req.body ?? {});
+    if (entry) {
+      broadcast({
+        type: 'gbrain:remember',
+        payload: { id: entry.id, title: entry.title, at: entry.at },
+      });
+    }
+    res.json({ ok: true, entry });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 app.get('/api/status', (_req, res) => {
   res.json({
     rooms: rooms.size,
     runningAgents: agents.runningCount,
     linearConnected: !!linear,
     maxConcurrent: MAX_CONCURRENT,
+    gbrainEntries: gbrain.count,
   });
 });
 
@@ -496,6 +556,7 @@ httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`  Max concurrent agents: ${MAX_CONCURRENT}`);
   console.log(`  Room states: ${ACTIVE_STATES.join(', ')}`);
   console.log(`  Agent trigger states: ${AGENT_TRIGGER_STATES.join(', ')}`);
+  console.log(`  G-Brain: ${gbrain.count} entries (${GBRAIN_DATA_DIR})`);
 
   if (linear) {
     syncLinear();
