@@ -273,10 +273,10 @@ export class Orchestrator {
       if (session.status === "running" || session.status === "queued") {
         session.status = "stopped";
         session.completedAt = new Date().toISOString();
-        session.latestEvent = "Session stopped by backend restart";
+        session.latestEvent = "Codex process detached by backend restart";
         session.transcript = [
           ...(session.transcript ?? []),
-          lifecycle("Session stopped by backend restart")
+          lifecycle("Codex process detached by backend restart")
         ].slice(-120);
       }
 
@@ -411,7 +411,7 @@ export class Orchestrator {
   private async retrieveMemory(session: AgentSession, query: string): Promise<string> {
     this.recordEvent(session, gbrainEvent("Walking to g-brain to retrieve relevant memory"));
     const hits = await this.gbrain.search(query);
-    this.recordEvent(session, gbrainEvent(hits.length ? `Retrieved ${hits.length} g-brain memories` : "No matching g-brain memory found"));
+    this.recordEvent(session, gbrainEvent(`Retrieved ${hits.length} g-brain memories`));
     return this.gbrain.formatHits(hits);
   }
 

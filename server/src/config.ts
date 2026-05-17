@@ -30,7 +30,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     symphonyApiKey: clean(mergedEnv.SYMPHONY_API_KEY),
     targetRepo: clean(mergedEnv.AGENTDEVSTORY_TARGET_REPO) ?? rootDir,
     workspaceRoot: path.resolve(clean(mergedEnv.AGENTDEVSTORY_WORKSPACE_ROOT) ?? "/tmp/agentdevstory-workspaces"),
-    codexCommand: splitCommand(clean(mergedEnv.CODEX_CMD) ?? "codex exec --json --sandbox workspace-write --skip-git-repo-check"),
+    codexCommand: splitCommand(clean(mergedEnv.CODEX_CMD) ?? "codex exec --json --enable hooks --sandbox workspace-write --skip-git-repo-check"),
     maxConcurrentAgents: toInt(mergedEnv.MAX_CONCURRENT_AGENTS, 2),
     pollIntervalMs: toInt(mergedEnv.POLL_INTERVAL_MS, 10_000),
     retryBaseMs: toInt(mergedEnv.RETRY_BASE_MS, 30_000),

@@ -219,6 +219,7 @@ class TerminalUI {
           kind = 'agent';
         } else if (parsed.type === 'item.completed' && parsed.item?.type === 'error') {
           text = parsed.item.message ?? text;
+          if (text.includes('[features].codex_hooks') && text.includes('deprecated')) return;
           kind = 'error';
         } else if (parsed.type === 'item.completed' && parsed.item?.type === 'command_execution') {
           const cmd = parsed.item.command || '';
@@ -249,6 +250,9 @@ class TerminalUI {
       }
     } else if (event.kind === 'lifecycle') {
       kind = 'agent';
+      if (text === 'Session stopped by backend restart') {
+        text = 'Codex process detached by backend restart';
+      }
       text = `[session] ${text}`;
     } else if (event.kind === 'gbrain') {
       kind = 'agent';

@@ -43,13 +43,15 @@ export class GBrainMemory {
 
   async search(query: string, limit = 5): Promise<GBrainMemoryHit[]> {
     const queryTerms = terms(query);
-    if (queryTerms.size === 0) return [];
+    if (queryTerms.size === 0) return this.fallbackRepoContext(limit);
 
-    return this.entries
+    const hits = this.entries
       .map((entry) => ({ ...entry, score: scoreEntry(entry, queryTerms) }))
       .filter((entry) => entry.score > 0)
       .sort((a, b) => b.score - a.score || b.at.localeCompare(a.at))
       .slice(0, limit);
+
+    return hits.length ? hits : this.fallbackRepoContext(limit);
   }
 
   async rememberSession(session: AgentSession): Promise<void> {
@@ -95,6 +97,27 @@ export class GBrainMemory {
   private async save(): Promise<void> {
     await mkdir(path.dirname(this.filePath), { recursive: true });
     await Bun.write(this.filePath, JSON.stringify({ entries: this.entries }, null, 2));
+  }
+
+  private fallbackRepoContext(limit: number): GBrainMemoryHit[] {
+    const priority = [
+      "repo:README.md",
+      "repo:server/src/orchestrator.ts",
+      "repo:server/src/runner.ts",
+      "repo:src/ui.js",
+      "repo:src/scenes/AgencyFloorScene.js",
+      "repo:src/world/Agent.js",
+      "repo:shared/types.ts"
+    ];
+
+    const byId = new Map(this.entries.map((entry) => [entry.id, entry]));
+    return priority
+      .map((id, index) => {
+        const entry = byId.get(id);
+        return entry ? { ...entry, score: Math.max(1, priority.length - index) } : null;
+      })
+      .filter((entry): entry is GBrainMemoryHit => entry !== null)
+      .slice(0, limit);
   }
 
   private async seedFromRepository(): Promise<boolean> {
